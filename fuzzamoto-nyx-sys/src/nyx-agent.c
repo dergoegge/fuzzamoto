@@ -1,6 +1,7 @@
 #include <dlfcn.h>
 #include <execinfo.h>
 #include <inttypes.h>
+#include <math.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stddef.h>
@@ -64,8 +65,8 @@ size_t nyx_init() {
           agent_config.coverage_bitmap_size);
   if (&__afl_area_ptr) {
     hprintf("[init] scenario was build with afl instrumentation, extending the "
-           "map by %d edges\n",
-           __afl_map_size);
+            "map by %d edges\n",
+            __afl_map_size);
     agent_config.coverage_bitmap_size += __afl_map_size;
   } else {
     hprintf("[init] scenario not compiled with afl instrumentation\n");
@@ -113,6 +114,25 @@ size_t nyx_init() {
   kAFL_hypercall(HYPERCALL_KAFL_SET_AGENT_CONFIG, (uintptr_t)&agent_config);
 
   return host_config.payload_buffer_size;
+}
+
+#define MIN(a, b) ((a) < (b) ? (a) : (b))
+
+/** Dump contents of `data` to a file on the host named `file_name` */
+void nyx_dump_file_to_host(const char *file_name, size_t file_name_len,
+                           const uint8_t *data, size_t len) {
+  char file_name_array[256] = {0};
+  memset(file_name_array, 0, 256);
+  strncpy(file_name_array, file_name,
+          MIN(file_name_len, sizeof(file_name_array)));
+  file_name_array[255] = 0;
+
+  kafl_dump_file_t file_obj = {0};
+  file_obj.file_name_str_ptr = (uintptr_t)file_name_array;
+  file_obj.append = 1;
+  file_obj.bytes = len;
+  file_obj.data_ptr = (uintptr_t)data;
+  kAFL_hypercall(HYPERCALL_KAFL_DUMP_FILE, (uintptr_t)(&file_obj));
 }
 
 /** Copy the next fuzz input into `data` and return the new size of the input.

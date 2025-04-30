@@ -8,9 +8,13 @@ repository.workspace = true
 
 [features]
 record = []
+nyx = ["dep:fuzzamoto-nyx-sys"]
 
 [dependencies]
 fuzzamoto = { path = "../fuzzamoto" }
+fuzzamoto-ir = { path = "../fuzzamoto-ir" }
+fuzzamoto-nyx-sys = { path = "../fuzzamoto-nyx-sys", optional = true }
+
 bitcoin = "0.32.0"
 bitcoin_hashes = "0.16.0"
 io = { package = "bitcoin-io", version = "0.1.1" }
@@ -20,6 +24,9 @@ serde_json = "1.0.140"
 arbitrary = { version = "1.4.1", features = ["derive"] }
 hex = "0.4.3"
 base64 = "0.22.1"
+postcard = { version = "1.1.1", features = [
+  "alloc",
+], default-features = false }
 
 [[bin]]
 name = "scenario-generic"
@@ -40,3 +47,7 @@ path = "bin/wallet_migration.rs"
 [[bin]]
 name = "scenario-rpc-generic"
 path = "bin/rpc_generic.rs"
+
+[[bin]]
+name = "scenario-ir"
+path = "bin/ir.rs"

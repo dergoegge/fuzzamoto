@@ -57,6 +57,8 @@ Actual fuzzing (i.e. input generation) can currently only be done on bare metal
 x86-64 systems (limitiation of Nyx). See the [Dockerfile](Dockerfile) for an
 example setup.
 
+### Fuzzing with AFL++
+
 Example: fuzzing the http server of Bitcoin Core:
 
 ```
@@ -66,7 +68,7 @@ root@...# mkdir /tmp/in && echo "AAA" > /tmp/in/A
 root@...# afl-fuzz -X -i /tmp/in -o /tmp/out -- /tmp/fuzzamoto_scenario-http-server
 ```
 
-### Multi-core campaigns
+#### Multi-core campaigns
 
 Running a multi-core campaign can be done with
 [`AFL_Runner`](https://github.com/0xricksanchez/AFL_Runner) (installed in the
@@ -78,6 +80,51 @@ Example: fuzzing the http server of Bitcoin Core with 16 cores:
 root@...# aflr run --nyx-mode --target /tmp/fuzzamoto_scenario-http-server/ \
     --input-dir /tmp/http_in/ --output-dir /tmp/http_out/ \
     --runners 16
+```
+
+### Fuzzing with fuzzamoto-libafl 
+
+See [Dockerfile.libafl](Dockerfile.libafl) for instructions.
+
+#### Bootstrapping a corpus
+
+`fuzzamoto-libafl` can't start from an empty corpus, at least one valid IR
+input needs to exist in the input folder. Inputs can generated from scratch
+with `fuzzamoto-cli ir generate`.
+
+```
+# Generate a corpus with 32 inputs, each with max. 4 iterations of generation
+$ fuzzamoto-cli ir generate --output <output_dir> \
+    --iterations 4 --programs 32 \
+    --context program.ctx
+```
+
+#### Running a campaign
+
+```
+$ ./target/release/fuzzamoto-libafl --input /tmp/in --output /tmp/out/ \
+    --share /tmp/share-ir/ --buffer-size 4194304
+```
+
+#### Upgrading corpora after `fuzzamoto-ir` changes
+
+When new operations are added to `fuzzamoto-ir` the corpus needs to be
+converted to a new format, because the default format on disk is `postcard`
+which makes inputs with differnt versions of the ir crate incompatible.
+
+The conversion is done with the `fuzzamoto-cli` tool, by converting the current
+corpus to json using the old ir crate and then back to ir using the new ir
+crate.
+
+Note: if operations themselves were changed (e.g. number of inputs or input
+types), then the json conversion will likely not work. In this case a custom
+conversion will needs to be written or the corpus may also be re-generated.
+
+```
+# Convert the current corpus to json using the old ir crate
+$ fuzzamoto-cli ir convert --from postcard --to json <input_corpus> <output_corpus_json>
+# Convert back to ir using the new ir crate
+$ fuzzamoto-cli ir convert --from json --to postcard <output_corpus_json> <output_corpus>
 ```
 
 ### Reproducing testcases
@@ -117,6 +164,8 @@ solution is to make the harness/test produce valid inputs (if possible).
 Current patches:
 
 - `bitcoin-core-rng.patch`: Attempts to make Bitcoin Core's RNG deterministic
+- `bitcoin-core-aggressive-rng.patch`: Same as `bitcoin-core-rng.patch` but
+  more aggressive
 
 ## Bugs found by Fuzzamoto
 

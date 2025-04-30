@@ -7,7 +7,14 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-clap = { version = "4.4", features = ["derive"] }
+clap = { version = "4.4", features = ["derive", "string"] }
 env_logger = "0.11.6"
-fuzzamoto = { path = "../fuzzamoto" }
 log = "0.4.25"
+postcard = { version = "1.1.1", features = [
+  "alloc",
+], default-features = false }
+rand = { version = "0.8.5", features = ["small_rng"] }
+
+fuzzamoto = { path = "../fuzzamoto" }
+fuzzamoto-ir = { path = "../fuzzamoto-ir" }
+serde_json = "1.0.140"

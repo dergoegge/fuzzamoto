@@ -114,3 +114,4 @@ pub fn mine_block(prev_hash: BlockHash, height: u32, time: u32) -> Result<Block,
 
     Ok(block)
 }
+

@@ -1,0 +1,16 @@
+[package]
+name = "fuzzamoto-ir"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+rand = { version = "0.8.5", features = ["small_rng"] }
+bitcoin = "0.32.0"
+serde = { version = "1.0.197", features = ["derive"] }
+postcard = { version = "1.1.1", features = [
+  "alloc",
+], default-features = false }
+log = "0.4.27"

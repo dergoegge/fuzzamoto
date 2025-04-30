@@ -63,6 +63,9 @@ impl Target<V1Transport> for BitcoinCoreTarget {
             "-keypool=10",
             "-listenonion=0",
             "-i2pacceptincoming=0",
+            "-maxmempool=5", // 1MB
+            "-dbcache=4",    // 4MiB
+            "-datacarriersize=1000000",
         ]);
 
         let node = Node::with_conf(exe_path, &config)

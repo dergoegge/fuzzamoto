@@ -1,5 +1,13 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
+use fuzzamoto_ir::compiler::Compiler;
+use fuzzamoto_ir::{
+    AdvanceTimeGenerator, Generator, InstructionContext, Program, ProgramBuilder, ProgramContext,
+    SendMessageGenerator, TxGenerator, TxoGenerator,
+};
 use log;
+use rand::Rng;
+use rand::rngs::ThreadRng;
+use rand::seq::SliceRandom;
 use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
@@ -65,6 +73,65 @@ enum Commands {
         #[arg(long, help = "Path to the fuzzamoto scenario scenario binary")]
         scenario: PathBuf,
     },
+    /// Fuzzamoto intermediate representation (IR) commands
+    IR {
+        #[command(subcommand)]
+        command: IRCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum IRCommands {
+    /// Generate fuzzamoto IR
+    Generate {
+        #[arg(long, help = "Path to the output directory for the generated IR")]
+        output: PathBuf,
+        #[arg(
+            long,
+            help = "Max number of iterations to generate each output IR program for"
+        )]
+        iterations: usize,
+        #[arg(long, help = "Number of IR programs to generate")]
+        programs: usize,
+        #[arg(long, help = "Path to the program context file")]
+        context: PathBuf,
+        #[arg(long, help = "Path to the program context file")]
+        txos: Option<PathBuf>,
+    },
+    /// Compile fuzzamoto IR
+    Compile {
+        #[arg(long, help = "Path to the input file/directory for the generated IR")]
+        input: PathBuf,
+        #[arg(long, help = "Path to the output file/directory for the compiled IR")]
+        output: PathBuf,
+    },
+
+    /// Convert fuzzamoto corpora
+    Convert {
+        #[arg(long, help = "Format of the input IR", value_enum, default_value_t = CorpusFormat::Postcard)]
+        from: CorpusFormat,
+        #[arg(long, help = "Format of the output IR", value_enum, default_value_t = CorpusFormat::Json)]
+        to: CorpusFormat,
+        #[arg(long, help = "Path to the input file/directory for the generated IR")]
+        input: PathBuf,
+        #[arg(long, help = "Path to the output file/directory for the converted IR")]
+        output: PathBuf,
+    },
+
+    /// Print human readable IR
+    Print {
+        #[arg(long, help = "Print IR in json format", default_value_t = false)]
+        json: bool,
+
+        #[arg(help = "Path to the input IR file ot be displayed")]
+        input: PathBuf,
+    },
+}
+
+#[derive(ValueEnum, Debug, Clone)]
+enum CorpusFormat {
+    Json,
+    Postcard, // Default corpus format (https://github.com/jamesmunns/postcard)
 }
 
 fn create_sharedir(
@@ -378,6 +445,208 @@ fn record_test_cases(
     Ok(())
 }
 
+fn generate_ir(
+    output: &PathBuf,
+    iterations: usize,
+    programs: usize,
+    context: &PathBuf,
+    txos: &Option<PathBuf>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let txos = if let Some(txos_file) = txos {
+        let bytes = std::fs::read(txos_file).unwrap();
+        let txos: Vec<fuzzamoto_ir::Txo> = postcard::from_bytes(&bytes).unwrap();
+        txos
+    } else {
+        vec![]
+    };
+
+    let mut rng = rand::thread_rng();
+    let generators: Vec<Box<dyn Generator<ThreadRng>>> = vec![
+        Box::new(SendMessageGenerator::default()),
+        Box::new(AdvanceTimeGenerator::default()),
+        Box::new(TxoGenerator::new(txos)),
+        //Box::new(WitnessGenerator::new()),
+        Box::new(TxGenerator),
+    ];
+
+    let context = std::fs::read(context.clone())?;
+    let context: ProgramContext = postcard::from_bytes(&context)?;
+
+    for _ in 0..programs {
+        let mut program = Program::unchecked_new(context.clone(), vec![]);
+
+        let mut insertion_index = 0;
+        for _i in 0..rng.gen_range(1..iterations) {
+            let mut builder = ProgramBuilder::new(program.context.clone());
+            if !program.instructions.is_empty() {
+                let instrs = &program.instructions[..insertion_index];
+                builder.append_all(instrs.iter().cloned()).unwrap();
+            }
+
+            let variable_threshold = builder.variable_count();
+
+            if let Err(_) = generators
+                .choose(&mut rng)
+                .unwrap()
+                .generate(&mut builder, &mut rng)
+            {
+                continue;
+            }
+
+            let second_half = Program::unchecked_new(
+                builder.context().clone(),
+                program.instructions[insertion_index..]
+                    .iter()
+                    .cloned()
+                    .collect(),
+            );
+
+            builder
+                .append_program(
+                    &second_half,
+                    variable_threshold,
+                    builder.variable_count() - variable_threshold,
+                )
+                .unwrap();
+
+            program = builder.finalize().unwrap();
+            insertion_index = builder
+                .get_random_instruction_index(&mut rng, InstructionContext::Global)
+                .unwrap()
+                .max(1);
+        }
+
+        let file_name = output.join(format!("{:8x}.ir", rng.r#gen::<u64>()));
+        let bytes = postcard::to_allocvec(&program)?;
+        std::fs::write(&file_name, &bytes)?;
+
+        log::info!("Generated IR: {}", file_name.display());
+    }
+
+    Ok(())
+}
+
+fn compile_ir_file(input: &PathBuf, output: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    assert!(input.is_file());
+
+    let bytes = std::fs::read(input)?;
+    let program: Program = postcard::from_bytes(&bytes)?;
+
+    let compiler = Compiler::new();
+    let compiled = compiler.compile(&program).unwrap();
+
+    let bytes = postcard::to_allocvec(&compiled)?;
+    std::fs::write(output, &bytes)?;
+
+    Ok(())
+}
+
+fn compile_ir_dir(input: &PathBuf, output: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    for entry in input.read_dir()? {
+        let path = entry?.path();
+        if path.is_file() && !path.file_name().unwrap().to_str().unwrap().starts_with(".") {
+            log::trace!("Compiling {:?}", path);
+            compile_ir_file(
+                &path,
+                &output
+                    .join(path.file_name().unwrap())
+                    .with_extension("prog"),
+            )?;
+        }
+    }
+
+    Ok(())
+}
+
+fn compile_ir(input: &PathBuf, output: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    if input.is_file() {
+        compile_ir_file(input, output)?;
+    } else if input.is_dir() && output.is_dir() {
+        compile_ir_dir(input, output)?;
+    } else {
+        return Err("Invalid input or output".into());
+    }
+
+    Ok(())
+}
+
+fn print_ir(input: &PathBuf, json: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let bytes = std::fs::read(input)?;
+    let program: Program = postcard::from_bytes(&bytes)?;
+
+    if json {
+        println!("{}", serde_json::to_string(&program)?);
+    } else {
+        println!("{}", program);
+    }
+    Ok(())
+}
+
+fn convert_ir_dir(
+    from: &CorpusFormat,
+    to: &CorpusFormat,
+    input: &PathBuf,
+    output: &PathBuf,
+) -> Result<(), Box<dyn std::error::Error>> {
+    for entry in input.read_dir()? {
+        let path = entry?.path();
+        if path.is_file() && !path.file_name().unwrap().to_str().unwrap().starts_with(".") {
+            let mut new_path = output.join(path.file_name().unwrap().to_str().unwrap());
+
+            match *to {
+                CorpusFormat::Postcard => {
+                    new_path.set_extension("ir");
+                }
+                CorpusFormat::Json => {
+                    new_path.set_extension("json");
+                }
+            }
+
+            convert_ir_file(from, to, &path, &new_path)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn convert_ir_file(
+    from: &CorpusFormat,
+    to: &CorpusFormat,
+    input: &PathBuf,
+    output: &PathBuf,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let bytes = std::fs::read(input)?;
+    let program: Program = match *from {
+        CorpusFormat::Postcard => postcard::from_bytes(&bytes)?,
+        CorpusFormat::Json => serde_json::from_slice(&bytes)?,
+    };
+
+    let bytes = match *to {
+        CorpusFormat::Postcard => postcard::to_allocvec(&program)?,
+        CorpusFormat::Json => serde_json::to_vec(&program)?,
+    };
+    std::fs::write(output, &bytes)?;
+
+    Ok(())
+}
+
+fn convert_ir(
+    from: &CorpusFormat,
+    to: &CorpusFormat,
+    input: &PathBuf,
+    output: &PathBuf,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if input.is_file() {
+        convert_ir_file(from, to, input, output)?;
+    } else if input.is_dir() && output.is_dir() {
+        convert_ir_dir(from, to, input, output)?;
+    } else {
+        return Err("Invalid input or output".into());
+    }
+
+    Ok(())
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
 
@@ -417,6 +686,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         } => {
             record_test_cases(output.clone(), corpus.clone(), scenario.clone())?;
         }
+        Commands::IR { command } => match command {
+            IRCommands::Generate {
+                output,
+                iterations,
+                programs,
+                context,
+                txos,
+            } => {
+                generate_ir(output, *iterations, *programs, context, txos)?;
+            }
+            IRCommands::Compile { input, output } => {
+                compile_ir(input, output)?;
+            }
+            IRCommands::Print { input, json } => {
+                print_ir(input, *json)?;
+            }
+            IRCommands::Convert {
+                from,
+                to,
+                input,
+                output,
+            } => {
+                convert_ir(from, to, input, output)?;
+            }
+        },
     }
 
     Ok(())

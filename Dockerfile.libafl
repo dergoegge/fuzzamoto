@@ -1,0 +1,124 @@
+FROM debian:bookworm
+SHELL ["/bin/bash", "-c"]
+
+# ------ Build and install dependencies ------
+
+RUN apt-get update
+
+ARG LLVM_V=19
+
+# Make sure we can install the llvm toolchain
+RUN apt-get install -y software-properties-common
+RUN apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 15CF4D18AF4F7421
+RUN apt-add-repository "deb http://apt.llvm.org/bookworm/ llvm-toolchain-bookworm-${LLVM_V} main"
+RUN apt-add-repository "deb-src http://apt.llvm.org/bookworm/ llvm-toolchain-bookworm-${LLVM_V} main"
+
+# Install deps for AFL++, Nyx, Bitcoin Core
+RUN apt-get update && apt-get install -y \
+  ninja-build \
+  libgtk-3-dev \
+  pax-utils \
+  python3-msgpack \
+  python3-jinja2 \
+  curl \
+  lld-${LLVM_V} \
+  llvm-${LLVM_V} \
+  llvm-${LLVM_V}-dev \
+  clang-${LLVM_V} \
+  cpio \
+  git \
+  build-essential \
+  libtool \
+  autotools-dev \
+  automake \
+  cmake \
+  pkg-config \
+  bsdmainutils \
+  openssh-client \
+  libcapstone-dev \
+  python3 \
+  libzstd-dev \
+  tmux \
+  vim \
+  gnuplot
+
+# Install rust and tools
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+ENV PATH="/root/.cargo/bin:${PATH}"
+RUN rustup install nightly && rustup default nightly
+RUN cargo install cargo-afl
+
+WORKDIR /
+# Clone AFLplusplus and build
+ENV LLVM_CONFIG=llvm-config-${LLVM_V}
+RUN git clone https://github.com/AFLplusplus/AFLplusplus
+RUN cd AFLplusplus && make PERFORMANCE=1 -j$(nproc --ignore 1)
+
+# ------ Build Bitcoin Core and the nyx agent ------
+
+# Build Bitcoin Core
+ARG OWNER=bitcoin
+ARG REPO=bitcoin
+ARG BRANCH=master
+RUN git clone --depth 1 --branch $BRANCH https://github.com/$OWNER/$REPO.git
+
+ENV CC=/AFLplusplus/afl-clang-fast
+ENV CXX=/AFLplusplus/afl-clang-fast++
+ENV LD=/AFLplusplus/afl-clang-fast
+
+ENV SOURCES_PATH=/tmp/bitcoin-depends
+RUN make -C bitcoin/depends NO_QT=1 NO_BDB=1 NO_ZMQ=1 NO_UPNP=1 NO_NATPMP=1 NO_USDT=1 download-linux SOURCES_PATH=$SOURCES_PATH
+# Keep extracted source
+RUN sed -i --regexp-extended '/.*rm -rf .*extract_dir.*/d' ./bitcoin/depends/funcs.mk && \
+    make -C ./bitcoin/depends DEBUG=1 NO_QT=1 NO_BDB=1 NO_ZMQ=1 NO_USDT=1 \
+      SOURCES_PATH=$SOURCES_PATH \
+      AR=llvm-ar-${LLVM_V} NM=llvm-nm-${LLVM_V} RANLIB=llvm-ranlib-${LLVM_V} STRIP=llvm-strip-${LLVM_V} \
+      -j$(nproc)
+
+COPY ./target-patches/bitcoin-core-aggressive-rng.patch bitcoin/
+RUN cd bitcoin/ && \
+      git apply bitcoin-core-aggressive-rng.patch
+
+RUN cd bitcoin/ && cmake -B build_fuzz \
+      --toolchain ./depends/$(./depends/config.guess)/toolchain.cmake \
+      -DSANTIZERS="address" \
+      -DAPPEND_CPPFLAGS="-DFUZZAMOTO_FUZZING -DFUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION -DABORT_ON_FAILED_ASSUME" \
+      -DAPPEND_LDFLAGS="-fuse-ld=lld-${LLVM_V}"
+
+RUN cmake --build bitcoin/build_fuzz -j$(nproc) --target bitcoind
+
+ENV CC=
+ENV CXX=
+ENV LD=
+
+# Build this dockerfile and then run it with `--privileged` and mount the fuzzamoto repo into it:
+#
+# $ docker build -f Dockerfile.libafl -t fuzzamoto-libafl .
+# $ docker run --privileged -v $PWD:/fuzzamoto -it fuzzamoto-libafl bash
+#
+# Inside the container, run:
+#
+# root@abc$ cd /fuzzamoto
+# root@abc$ BITCOIND_PATH=/bitcoin/build_fuzz/bin/bitcoind cargo build --workspace --verbose \
+#                 --features nyx,reduced_pow --release
+#
+# Then, create the nyx share dir:
+#
+# root@abc$ clang-19 -fPIC -DENABLE_NYX -D_GNU_SOURCE -DNO_PT_NYX \
+#    ./fuzzamoto-nyx-sys/src/nyx-crash-handler.c -ldl -I. -shared -o libnyx_crash_handler.so
+# root@abc$ target/release/fuzzamoto-cli init --sharedir /tmp/fuzzamoto_scenario-ir \
+#                 --crash-handler /fuzzamoto/libnyx_crash_handler.so \
+#                 --bitcoind /bitcoin/build_fuzz/bin/bitcoind \
+#                 --scenario ./target/release/scenario-ir
+# root@abc$ (cd /root/.cargo/git/checkouts/libafl-*/*/libafl_nyx/packer/packer/linux_x86_64-userspace/bin64/ && ./compile_64.sh)
+# root@abc$ cp /root/.cargo/git/checkouts/libafl-*/*/libafl_nyx/packer/packer/linux_x86_64-userspace/bin64/* /tmp/fuzzamoto_scenario-ir/
+# root@abc$ python3 /root/.cargo/git/checkouts/libafl-*/*/libafl_nyx/packer/packer/nyx_config_gen.py /tmp/fuzzamoto_scenario-ir Kernel -m 4096
+#
+# Then, run the fuzzer:
+#
+# root@abc$ mkdir /tmp/in
+# root@abc$ ./target/release/fuzzamoto-cli ir generate --output /tmp/in --iterations 10 --programs 16 --context ./program.ctx
+# root@abc$ ./target/release/fuzzamoto-libafl --input /tmp/in/ --output /tmp/out/ \
+#                 --share /tmp/fuzzamoto_scenario-ir/ --timeout 2000 \
+#                 --txos ./txos.dat --cores 0-9
+

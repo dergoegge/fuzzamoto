@@ -1,0 +1,19 @@
+diff --git a/src/random.cpp b/src/random.cpp
+index fa3d8ec3f1..f3c51d3967 100644
+--- a/src/random.cpp
++++ b/src/random.cpp
+@@ -693,6 +693,14 @@ FastRandomContext::FastRandomContext(bool fDeterministic) noexcept : requires_se
+     // Note that despite always initializing with ZERO_KEY, requires_seed is set to true if not
+     // fDeterministic. That means the rng will be reinitialized with a secure random key upon first
+     // use.
++#ifdef FUZZAMOTO_FUZZING
++    // Aggressively stub out rng when fuzzing with fuzzamoto. Simply using
++    // MakeRandDeterministicDANGEROUS is not enough as thread scheduling still
++    // makes it non-deterministic overall.
++    requires_seed = false;
++    // TODO: provide a seed e.g. via env variable to produce deterministic
++    // but different results.
++#endif
+ }
+ 
+ void RandomInit()
