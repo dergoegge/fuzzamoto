@@ -626,6 +626,28 @@ mount -o remount,size=50% /dev/shm
     --share /tmp/fuzzamoto_scenario-ir/ \
     --cores 0-15 # 16 cores, adjust for your system
 </code></pre>
+<p>Once it's running you'll see output similar to the following:</p>
+<pre><code>...
+💗 time: 0h-12m-38s (x13) execs: 273166 cov: 5.443% corpus: 30988 exec/sec: 366.3 bugs: 0
+📊 time: 0h-12m-38s (x13) execs: 273166 cov: 5.443% corpus: 30988 exec/sec: 366.2 bugs: 0
+📊 time: 0h-12m-38s (x13) execs: 273166 cov: 5.443% corpus: 30989 exec/sec: 366.0 bugs: 0
+💗 time: 0h-12m-40s (x13) execs: 273621 cov: 5.443% corpus: 30989 exec/sec: 365.7 bugs: 0
+📊 time: 0h-12m-40s (x13) execs: 273621 cov: 5.443% corpus: 30989 exec/sec: 365.7 bugs: 0
+...
+</code></pre>
+<p>📊 inidcates that a new intersting input has been discovered and 💗 indicates a
+heart-beat event from one of the fuzzers instances. Insect emojis such as 🪲
+indicate that a new bug has been found.</p>
+<h2 id="troubleshooting"><a class="header" href="#troubleshooting">Troubleshooting</a></h2>
+<p>If the <code>cov</code> metric displayed in <code>fuzzamoto-libafl</code>'s output stays at 0%, then
+something is likely wrong and you'll need to troubleshoot.</p>
+<ul>
+<li>Use the <code>--verbose</code> flag to get more helpful output</li>
+<li>Make sure the <code>target/</code> directory was created by the container you're working
+in. If it was created by e.g. another container previously, then <code>libafl_nyx</code>
+will likely not have been build in your current container and the fuzzer will
+fail to start Nyx VMs</li>
+</ul>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="reproducing-testcases"><a class="header" href="#reproducing-testcases">Reproducing Testcases</a></h1>
 <p>Crashing or other interesting inputs can be reproduced without the snapshotting
 VM, by building the scenario binary without the nyx feature and supplying it
@@ -645,7 +667,7 @@ etc. are printed to the terminal.</p>
 <p>Or alternatively using <code>FUZZAMOTO_INPUT</code>:</p>
 <pre><code>FUZZAMOTO_INPUT=$PWD/testcase.dat RUST_LOG=info ./target/release/scenario-http-server ./bitcoind
 </code></pre>
-<h2 id="troubleshooting"><a class="header" href="#troubleshooting">Troubleshooting</a></h2>
+<h2 id="troubleshooting-1"><a class="header" href="#troubleshooting-1">Troubleshooting</a></h2>
 <ul>
 <li>
 <p>Make sure to not use the <code>nyx</code> feature or else you'll see:</p>

@@ -190,6 +190,28 @@ mount -o remount,size=50% /dev/shm
     --share /tmp/fuzzamoto_scenario-ir/ \
     --cores 0-15 # 16 cores, adjust for your system
 </code></pre>
+<p>Once it's running you'll see output similar to the following:</p>
+<pre><code>...
+💗 time: 0h-12m-38s (x13) execs: 273166 cov: 5.443% corpus: 30988 exec/sec: 366.3 bugs: 0
+📊 time: 0h-12m-38s (x13) execs: 273166 cov: 5.443% corpus: 30988 exec/sec: 366.2 bugs: 0
+📊 time: 0h-12m-38s (x13) execs: 273166 cov: 5.443% corpus: 30989 exec/sec: 366.0 bugs: 0
+💗 time: 0h-12m-40s (x13) execs: 273621 cov: 5.443% corpus: 30989 exec/sec: 365.7 bugs: 0
+📊 time: 0h-12m-40s (x13) execs: 273621 cov: 5.443% corpus: 30989 exec/sec: 365.7 bugs: 0
+...
+</code></pre>
+<p>📊 inidcates that a new intersting input has been discovered and 💗 indicates a
+heart-beat event from one of the fuzzers instances. Insect emojis such as 🪲
+indicate that a new bug has been found.</p>
+<h2 id="troubleshooting"><a class="header" href="#troubleshooting">Troubleshooting</a></h2>
+<p>If the <code>cov</code> metric displayed in <code>fuzzamoto-libafl</code>'s output stays at 0%, then
+something is likely wrong and you'll need to troubleshoot.</p>
+<ul>
+<li>Use the <code>--verbose</code> flag to get more helpful output</li>
+<li>Make sure the <code>target/</code> directory was created by the container you're working
+in. If it was created by e.g. another container previously, then <code>libafl_nyx</code>
+will likely not have been build in your current container and the fuzzer will
+fail to start Nyx VMs</li>
+</ul>
 
                     </main>
 
