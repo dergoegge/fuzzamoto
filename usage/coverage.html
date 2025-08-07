@@ -155,8 +155,16 @@ different than if you were to run <code>fuzzamoto-cli init</code>:</p>
 <p>The <code>Dockerfile.coverage</code> file can be used to run a corpus against a specific scenario.
 Both a host directory and a corpus directory must be mounted.</p>
 <p>Example:</p>
-<pre><code>docker build -t fuzzamoto-coverage -f Dockerfile.coverage .
-docker run --privileged -it -v $HOST_OUTPUT_DIR:/mnt/output -v $HOST_CORPUS_DIR:/mnt/corpus fuzzamoto-coverage /fuzzamoto/target/release/scenario-compact-blocks
+<pre><code>export HOST_OUTPUT_DIR=&quot;$(pwd)/coverage-output&quot;
+export HOST_CORPUS_DIR=&quot;$(pwd)/your-corpus&quot;
+export SCENARIO=&quot;name&quot;
+
+docker build -t fuzzamoto-coverage -f Dockerfile.coverage .
+docker run --privileged -it \
+    -v $HOST_OUTPUT_DIR:/mnt/output \
+    -v $HOST_CORPUS_DIR:/mnt/corpus \
+    fuzzamoto-coverage \
+    /fuzzamoto/target/release/scenario-$SCENARIO
 </code></pre>
 
                     </main>
