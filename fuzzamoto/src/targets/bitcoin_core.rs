@@ -104,7 +104,7 @@ impl Target<V1Transport> for BitcoinCoreTarget {
                     .set_nodelay(true)
                     .expect("Failed to set nodelay on inbound socket");
 
-                Ok(Connection::new(connection_type, V1Transport { socket }))
+                Ok(Connection::new(connection_type, V1Transport::new(socket)))
             }
             ConnectionType::Outbound => {
                 let (listener, port) = Self::create_listener()?;
@@ -132,7 +132,7 @@ impl Target<V1Transport> for BitcoinCoreTarget {
                     .set_nodelay(true)
                     .expect("Failed to set nodelay on outbound socket");
 
-                Ok(Connection::new(connection_type, V1Transport { socket }))
+                Ok(Connection::new(connection_type, V1Transport::new(socket)))
             }
         }
     }

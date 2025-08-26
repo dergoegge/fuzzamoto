@@ -144,12 +144,13 @@ impl<'a, TX: Transport, T: Target<TX>> GenericScenario<TX, T> {
                 wtxidrelay: *wtxidrelay,
                 addrv2: *addrv2,
                 erlay: *erlay,
-            })?;
+            }).map_err(|e| e.to_string())?;
             let sendcmpct = NetworkMessage::SendCmpct(SendCmpct {
                 version: 2,
                 send_compact,
             });
-            connection.send(&("sendcmpct".to_string(), encode::serialize(&sendcmpct)))?;
+            connection.send(&("sendcmpct".to_string(), encode::serialize(&sendcmpct)))
+                .map_err(|e| e.to_string())?;
             send_compact = !send_compact;
         }
 
@@ -167,7 +168,8 @@ impl<'a, TX: Transport, T: Target<TX>> GenericScenario<TX, T> {
             // Send block to the first connection
             connections[0]
                 .0
-                .send(&("block".to_string(), encode::serialize(&block)))?;
+                .send(&("block".to_string(), encode::serialize(&block)))
+                .map_err(|e| e.to_string())?;
 
             target.set_mocktime(time as u64)?;
 
@@ -194,13 +196,14 @@ impl<'a, TX: Transport, T: Target<TX>> GenericScenario<TX, T> {
         println!("{}", result);
 
         for (connection, _, _, _, _) in connections.iter_mut() {
-            connection.ping()?;
+            connection.ping().map_err(|e| e.to_string())?;
         }
 
         // Announce the tip on all connections
         for (connection, _, _, _, _) in connections.iter_mut() {
             let inv = NetworkMessage::Inv(vec![Inventory::Block(prev_hash)]);
-            connection.send_and_ping(&("inv".to_string(), encode::serialize(&inv)))?;
+            connection.send_and_ping(&("inv".to_string(), encode::serialize(&inv)))
+                .map_err(|e| e.to_string())?;
         }
 
         Ok(Self {
