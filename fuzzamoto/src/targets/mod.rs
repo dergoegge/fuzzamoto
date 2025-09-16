@@ -48,3 +48,8 @@ pub trait ConnectableTarget {
 pub trait HasTipHash {
     fn get_tip_hash(&self) -> Option<[u8; 32]>;
 }
+
+#[cfg(feature = "desocket")]
+pub type DefaultTransport = crate::connections::MockTransport;
+#[cfg(not(feature = "desocket"))]  
+pub type DefaultTransport = crate::connections::V1Transport;
