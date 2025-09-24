@@ -1,5 +1,5 @@
 use crate::{
-    IndexedVariable, Operation,
+    IndexedVariable, Operation, Variable,
     generators::{Generator, ProgramBuilder},
 };
 use bitcoin::opcodes::OP_TRUE;
@@ -29,37 +29,12 @@ fn get_random_output_type<R: RngCore>(rng: &mut R) -> OutputType {
     }
 }
 
-fn build_tx(
+fn build_outputs(
     builder: &mut ProgramBuilder,
-    funding_txos: &[IndexedVariable],
-    tx_version: u32,
+    mut_outputs_var: &IndexedVariable,
     output_amounts: &[(u64, OutputType)],
-) -> Result<(IndexedVariable, Vec<IndexedVariable>), GeneratorError> {
-    let tx_version_var =
-        builder.force_append_expect_output(vec![], Operation::LoadTxVersion(tx_version));
-
-    let tx_lock_time_var = builder.force_append_expect_output(vec![], Operation::LoadLockTime(0));
-    let mut_tx_var = builder.force_append_expect_output(
-        vec![tx_version_var.index, tx_lock_time_var.index],
-        Operation::BeginBuildTx,
-    );
-    let mut_inputs_var = builder.force_append_expect_output(vec![], Operation::BeginBuildTxInputs);
-
-    for funding_txo in funding_txos {
-        let sequence_var =
-            builder.force_append_expect_output(vec![], Operation::LoadSequence(0xffffffff));
-        builder.force_append(
-            vec![mut_inputs_var.index, funding_txo.index, sequence_var.index],
-            Operation::AddTxInput,
-        );
-    }
-
-    let inputs_var =
-        builder.force_append_expect_output(vec![mut_inputs_var.index], Operation::EndBuildTxInputs);
-
-    let mut_outputs_var =
-        builder.force_append_expect_output(vec![inputs_var.index], Operation::BeginBuildTxOutputs);
-
+    coinbase: bool,
+) -> Result<(), GeneratorError> {
     for (amount, output_type) in output_amounts.iter() {
         let scripts_var = match output_type {
             OutputType::PayToWitnessScriptHash => {
@@ -133,11 +108,53 @@ fn build_tx(
 
         let amount_var = builder.force_append_expect_output(vec![], Operation::LoadAmount(*amount));
 
+        let add_operation = if coinbase {
+            Operation::AddCoinbaseTxOutput
+        } else {
+            Operation::AddTxOutput
+        };
+
         builder.force_append(
             vec![mut_outputs_var.index, scripts_var.index, amount_var.index],
-            Operation::AddTxOutput,
+            add_operation,
         );
     }
+
+    Ok(())
+}
+
+fn build_tx(
+    builder: &mut ProgramBuilder,
+    funding_txos: &[IndexedVariable],
+    tx_version: u32,
+    output_amounts: &[(u64, OutputType)],
+) -> Result<(IndexedVariable, Vec<IndexedVariable>), GeneratorError> {
+    let tx_version_var =
+        builder.force_append_expect_output(vec![], Operation::LoadTxVersion(tx_version));
+
+    let tx_lock_time_var = builder.force_append_expect_output(vec![], Operation::LoadLockTime(0));
+    let mut_tx_var = builder.force_append_expect_output(
+        vec![tx_version_var.index, tx_lock_time_var.index],
+        Operation::BeginBuildTx,
+    );
+    let mut_inputs_var = builder.force_append_expect_output(vec![], Operation::BeginBuildTxInputs);
+
+    for funding_txo in funding_txos {
+        let sequence_var =
+            builder.force_append_expect_output(vec![], Operation::LoadSequence(0xffffffff));
+        builder.force_append(
+            vec![mut_inputs_var.index, funding_txo.index, sequence_var.index],
+            Operation::AddTxInput,
+        );
+    }
+
+    let inputs_var =
+        builder.force_append_expect_output(vec![mut_inputs_var.index], Operation::EndBuildTxInputs);
+
+    let mut_outputs_var =
+        builder.force_append_expect_output(vec![inputs_var.index], Operation::BeginBuildTxOutputs);
+
+    let _ = build_outputs(builder, &mut_outputs_var, output_amounts, false);
 
     let outputs_var = builder
         .force_append_expect_output(vec![mut_outputs_var.index], Operation::EndBuildTxOutputs);
@@ -396,6 +413,82 @@ impl<R: RngCore> Generator<R> for LargeTxGenerator {
 }
 
 impl Default for LargeTxGenerator {
+    fn default() -> Self {
+        Self {}
+    }
+}
+
+/// `CoinbaseTxGenerator` generates instructions for a coinbase tx into a program
+pub struct CoinbaseTxGenerator;
+
+impl<R: RngCore> Generator<R> for CoinbaseTxGenerator {
+    fn generate(&self, builder: &mut ProgramBuilder, rng: &mut R) -> GeneratorResult {
+        let tx_version_var =
+            builder.force_append_expect_output(vec![], Operation::LoadTxVersion(1));
+
+        let tx_lock_time_var =
+            builder.force_append_expect_output(vec![], Operation::LoadLockTime(0));
+
+        let mut_tx_var = builder.force_append_expect_output(
+            vec![tx_version_var.index, tx_lock_time_var.index],
+            Operation::BeginBuildCoinbaseTx,
+        );
+
+        let header_var = if rng.gen_bool(0.5) {
+            builder.get_random_variable(rng, Variable::Header)
+        } else {
+            builder.get_nearest_sent_header()
+        }
+        .ok_or(GeneratorError::MissingVariables)?;
+
+        let sequence_var =
+            builder.force_append_expect_output(vec![], Operation::LoadSequence(0xffffffff));
+
+        let coinbase_input_var = builder.force_append_expect_output(
+            vec![header_var.index, sequence_var.index],
+            Operation::BuildCoinbaseTxInput,
+        );
+
+        let mut_outputs_var = builder.force_append_expect_output(
+            vec![coinbase_input_var.index],
+            Operation::BeginBuildCoinbaseTxOutputs,
+        );
+        let output_amounts = {
+            let mut amounts = vec![];
+            let num_outputs = rng.gen_range(1..10);
+            for _i in 0..num_outputs {
+                amounts.push((
+                    rng.gen_range(5000..100_000_000),
+                    get_random_output_type(rng),
+                ));
+            }
+            amounts
+        };
+
+        let _ = build_outputs(builder, &mut_outputs_var, &output_amounts, true);
+
+        let outputs_var = builder.force_append_expect_output(
+            vec![mut_outputs_var.index],
+            Operation::EndBuildCoinbaseTxOutputs,
+        );
+
+        builder.force_append(
+            vec![
+                mut_tx_var.index,
+                coinbase_input_var.index,
+                outputs_var.index,
+            ],
+            Operation::EndBuildCoinbaseTx,
+        );
+        Ok(())
+    }
+
+    fn name(&self) -> &'static str {
+        "CoinbaseTxGenerator"
+    }
+}
+
+impl Default for CoinbaseTxGenerator {
     fn default() -> Self {
         Self {}
     }
