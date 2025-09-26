@@ -97,7 +97,7 @@ where
             .map(|m| m.list.clone())
             .unwrap_or(vec![]);
 
-        if novelties.is_empty() {
+        if !self.minimizing_crash && novelties.is_empty() {
             return Ok(());
         }
 
