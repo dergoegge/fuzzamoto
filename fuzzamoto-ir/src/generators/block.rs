@@ -23,8 +23,17 @@ impl<R: RngCore> Generator<R> for BlockGenerator {
         let mut random_tx_vars = builder.get_random_variables(rng, Variable::ConstTx);
         random_tx_vars.sort_by_key(|tx| tx.index);
 
+        let coinbase_tx_var = builder
+            .get_random_variable(rng, Variable::CoinbaseTx)
+            .ok_or(GeneratorError::MissingVariables)?;
+
         let begin_txs_var =
             builder.force_append_expect_output(vec![], Operation::BeginBlockTransactions);
+
+        builder.force_append(
+            vec![begin_txs_var.index, coinbase_tx_var.index],
+            Operation::AddCoinbaseTx,
+        );
 
         for tx_var in random_tx_vars {
             builder.force_append(vec![begin_txs_var.index, tx_var.index], Operation::AddTx);

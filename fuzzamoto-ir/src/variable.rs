@@ -45,4 +45,7 @@ pub enum Variable {
     Header,
 
     BlockVersion,
+
+    CoinbaseInput,
+    CoinbaseTx,
 }
