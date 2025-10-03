@@ -21,7 +21,7 @@ docker build -t fuzzamoto .
 And then create a new container from it:
 
 ```
-docker run --privileged -it fuzzamoto bash
+docker run --privileged -it -v $PWD:/fuzzamoto fuzzamoto bash
 ```
 
 `--privileged` is required to enable the use of kvm by Nyx.
@@ -30,6 +30,30 @@ docker run --privileged -it fuzzamoto bash
 
 *All commands in this example are supposed to be run inside the docker
 container.*
+
+First, build the scenarios and `fuzzamoto-cli` tool:
+
+```
+cd /fuzzamoto
+BITCOIND_PATH=/bitcoin/build_fuzz/bin/bitcoind cargo build \
+  --package fuzzamoto-scenarios --package fuzzamoto-cli \
+  --verbose --features "fuzzamoto/fuzz,fuzzamoto-scenarios/fuzz" --release
+```
+
+Then, build the crash handler:
+```
+clang-19 -fPIC -DENABLE_NYX -D_GNU_SOURCE -DNO_PT_NYX \
+    ./fuzzamoto-nyx-sys/src/nyx-crash-handler.c -ldl -I. -shared -o libnyx_crash_handler.so
+```
+
+And initialize the nyx share dir:
+```
+./target/release/fuzzamoto-cli init --sharedir /tmp/fuzzamoto_scenario-http-server \
+    --crash-handler /fuzzamoto/libnyx_crash_handler.so \
+    --bitcoind /bitcoin/build_fuzz/bin/bitcoind \
+    --scenario ./target/release/scenario-http-server \
+    --nyx-dir /AFLplusplus/nyx_mode
+```
 
 AFL++ can't start from an empty corpus, so unless you already have a seed
 corpus available, you'll need to create or find at least one seed input
@@ -55,7 +79,7 @@ cores. This can be done with
 ### Example: `http-server`
 
 ```
-aflr run --nyx-mode --target /tmp/fuzzamoto_scenario-http-server/ \
+aflr run --nyx-mode --afl-binary /AFLplusplus/afl-fuzz --target /tmp/fuzzamoto_scenario-http-server/ \
     --input-dir /tmp/http_in/ --output-dir /tmp/http_out/ \
     --runners 16
 ```
