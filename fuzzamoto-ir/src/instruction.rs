@@ -95,7 +95,6 @@ impl Instruction {
             | Operation::SendTx
             | Operation::SendTxNoWit
             | Operation::AddTxInput
-            | Operation::AddTxOutput
             | Operation::AddTxidInv
             | Operation::AddWtxidInv
             | Operation::AddTxidWithWitnessInv
@@ -116,6 +115,7 @@ impl Instruction {
             | Operation::TakeTxo => true,
 
             Operation::Nop { .. }
+            | Operation::AddTxOutput
             | Operation::BeginBuildTx
             | Operation::EndBuildTx
             | Operation::BeginBuildTxInputs
