@@ -73,6 +73,7 @@ impl Instruction {
             | Operation::AdvanceTime
             | Operation::LoadTime(_)
             | Operation::SetTime
+            | Operation::AddConnection
             | Operation::BuildPayToWitnessScriptHash
             | Operation::BuildPayToScriptHash
             | Operation::BuildRawScripts

@@ -28,6 +28,7 @@ pub struct Compiler {
 
     variables: Vec<Box<dyn Any>>,
     output: CompiledProgram,
+    connection_counter: usize,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
@@ -117,6 +118,9 @@ struct Nop;
 
 impl Compiler {
     pub fn compile(&mut self, ir: &Program) -> CompilerResult {
+        // Initialize connection counter with pre-existing connections from context
+        self.connection_counter = ir.context.num_connections;
+        
         for instruction in &ir.instructions {
             match instruction.operation.clone() {
                 Operation::Nop { .. }
@@ -194,6 +198,10 @@ impl Compiler {
                     self.handle_time_operations(&instruction)?;
                 }
 
+                Operation::AddConnection => {
+                    self.handle_new_connection_operations(&instruction)?;
+                }
+
                 Operation::SendRawMessage
                 | Operation::SendTxNoWit
                 | Operation::SendTx
@@ -221,6 +229,7 @@ impl Compiler {
             output: CompiledProgram {
                 actions: Vec::with_capacity(4096),
             },
+            connection_counter: 0,
         }
     }
 
@@ -763,6 +772,26 @@ impl Compiler {
                 self.output.actions.push(CompiledAction::SetTime(*time_var));
             }
             _ => unreachable!("Non-time operation passed to handle_time_operations"),
+        }
+        Ok(())
+    }
+
+    fn handle_new_connection_operations(&mut self, instruction: &Instruction) -> Result<(), CompilerError> {
+        match &instruction.operation {
+            Operation::AddConnection => {
+                let node_var = self.get_input::<usize>(&instruction.inputs, 0)?;
+                let connection_type_var = self.get_input::<String>(&instruction.inputs, 1)?;
+                
+                self.output.actions.push(CompiledAction::Connect(
+                    *node_var,
+                    connection_type_var.clone(),
+                ));
+                
+                let connection_id = self.connection_counter;
+                self.connection_counter += 1;
+                self.append_variable(connection_id);
+            }
+            _ => unreachable!("Non-connection operation passed to handle_new_connection_operations"),
         }
         Ok(())
     }
