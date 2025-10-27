@@ -3,8 +3,8 @@ use std::path::PathBuf;
 
 use fuzzamoto_ir::compiler::Compiler;
 use fuzzamoto_ir::{
-    AdvanceTimeGenerator, BlockGenerator, FullProgramContext, Generator, HeaderGenerator,
-    InstructionContext, Program, ProgramBuilder,
+    AdvanceTimeGenerator, BlockGenerator, CoinbaseTxGenerator, FullProgramContext, Generator,
+    HeaderGenerator, InstructionContext, Program, ProgramBuilder,
 };
 
 use rand::Rng;
@@ -112,6 +112,7 @@ pub fn generate_ir(
         //Box::new(SingleTxGenerator),
         Box::new(HeaderGenerator::new(context.headers.clone())),
         Box::new(BlockGenerator::default()),
+        Box::new(CoinbaseTxGenerator::default()),
     ];
 
     for _ in 0..programs {

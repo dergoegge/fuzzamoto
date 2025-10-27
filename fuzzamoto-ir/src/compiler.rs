@@ -113,6 +113,18 @@ struct Tx {
     output_selector: usize,
 }
 
+#[derive(Clone)]
+struct CoinbaseInput {
+    height: u32,
+    sequence: usize,
+    total_value: u64,
+}
+
+#[derive(Clone)]
+struct CoinbaseTx {
+    tx: Tx,
+}
+
 struct Nop;
 
 impl Compiler {
@@ -144,6 +156,7 @@ impl Compiler {
 
                 Operation::BeginBlockTransactions
                 | Operation::AddTx
+                | Operation::AddCoinbaseTx
                 | Operation::EndBlockTransactions
                 | Operation::BuildBlock => {
                     self.handle_block_building_operations(&instruction)?;
@@ -188,6 +201,15 @@ impl Compiler {
                 | Operation::AddTxOutput
                 | Operation::TakeTxo => {
                     self.handle_transaction_building_operations(&instruction)?;
+                }
+
+                Operation::BeginBuildCoinbaseTx
+                | Operation::EndBuildCoinbaseTx
+                | Operation::BuildCoinbaseTxInput
+                | Operation::BeginBuildCoinbaseTxOutputs
+                | Operation::EndBuildCoinbaseTxOutputs
+                | Operation::AddCoinbaseTxOutput => {
+                    self.handle_coinbase_building_operations(&instruction)?;
                 }
 
                 Operation::AdvanceTime | Operation::SetTime => {
@@ -523,6 +545,112 @@ impl Compiler {
         Ok(())
     }
 
+    fn handle_coinbase_building_operations(
+        &mut self,
+        instruction: &Instruction,
+    ) -> Result<(), CompilerError> {
+        match &instruction.operation {
+            Operation::BeginBuildCoinbaseTx => {
+                let tx_version_var = self.get_input::<u32>(&instruction.inputs, 0)?;
+                let tx_lock_time_var = self.get_input::<u32>(&instruction.inputs, 1)?;
+
+                self.append_variable(Tx {
+                    tx: Transaction {
+                        version: transaction::Version(*tx_version_var as i32),
+                        lock_time: LockTime::from_consensus(*tx_lock_time_var),
+                        input: Vec::new(),
+                        output: Vec::new(),
+                    },
+                    txos: Vec::new(),
+                    output_selector: 0,
+                });
+            }
+            Operation::EndBuildCoinbaseTx => {
+                let mut tx_var = self.get_input_mut::<Tx>(&instruction.inputs, 0)?.clone();
+                let coinbase_input_var = self
+                    .get_input::<CoinbaseInput>(&instruction.inputs, 1)?
+                    .clone();
+                let tx_outputs_var = self.get_input::<TxOutputs>(&instruction.inputs, 2)?.clone();
+
+                let mut witness = bitcoin::Witness::new();
+                witness.push([0u8, 32]);
+                let coinbase_txin = TxIn {
+                    previous_output: OutPoint::null(),
+                    script_sig: ScriptBuf::builder()
+                        .push_int((coinbase_input_var.height) as i64)
+                        .push_int(0xFFFFFFFF)
+                        .as_script()
+                        .into(),
+                    sequence: Sequence(coinbase_input_var.sequence.try_into().unwrap()),
+                    witness,
+                };
+
+                tx_var.tx.input.push(coinbase_txin);
+
+                tx_var
+                    .tx
+                    .output
+                    .extend(
+                        tx_outputs_var
+                            .outputs
+                            .iter()
+                            .map(|(scripts, amount)| TxOut {
+                                value: Amount::from_sat(*amount),
+                                script_pubkey: Script::from_bytes(scripts.script_pubkey.as_slice())
+                                    .into(),
+                            }),
+                    );
+
+                let witness_commitment_output =
+                    fuzzamoto::test_utils::mining::create_witness_commitment_output(
+                        WitnessMerkleNode::from_raw_hash(Wtxid::all_zeros().into()),
+                    );
+
+                tx_var.tx.output.push(witness_commitment_output);
+
+                self.append_variable(CoinbaseTx { tx: tx_var });
+            }
+            Operation::BuildCoinbaseTxInput => {
+                let header_var = self.get_input::<Header>(&instruction.inputs, 0)?;
+                let sequence_var = self.get_input::<usize>(&instruction.inputs, 1)?;
+
+                self.append_variable(CoinbaseInput {
+                    height: header_var.height + 1,
+                    sequence: *sequence_var,
+                    total_value: 25,
+                });
+            }
+            Operation::BeginBuildCoinbaseTxOutputs => {
+                let coinbase_input_var = self.get_input::<CoinbaseInput>(&instruction.inputs, 0)?;
+                let fees = coinbase_input_var.total_value;
+                self.append_variable(TxOutputs {
+                    outputs: Vec::new(),
+                    fees,
+                });
+            }
+            Operation::EndBuildCoinbaseTxOutputs => {
+                let tx_outputs_var = self
+                    .get_input_mut::<TxOutputs>(&instruction.inputs, 0)?
+                    .clone();
+                self.append_variable(tx_outputs_var);
+            }
+            Operation::AddCoinbaseTxOutput => {
+                let scripts = self.get_input::<Scripts>(&instruction.inputs, 1)?.clone();
+                let amount = self.get_input::<u64>(&instruction.inputs, 2)?.clone();
+
+                let mut_tx_outputs_var = self.get_input_mut::<TxOutputs>(&instruction.inputs, 0)?;
+
+                let amount = amount.min(mut_tx_outputs_var.fees);
+                mut_tx_outputs_var.outputs.push((scripts, amount));
+                mut_tx_outputs_var.fees -= amount;
+            }
+            _ => unreachable!(
+                "Non-coinbase-building operation passed to handle_coinbase_building_operations"
+            ),
+        }
+        Ok(())
+    }
+
     fn handle_message_sending_operations(
         &mut self,
         instruction: &Instruction,
@@ -737,6 +865,14 @@ impl Compiler {
                     self.get_input_mut::<Vec<Tx>>(&instruction.inputs, 0)?;
                 block_transactions_var.push(tx_var);
             }
+            Operation::AddCoinbaseTx => {
+                let coinbase_tx_var = self
+                    .get_input::<CoinbaseTx>(&instruction.inputs, 1)?
+                    .clone();
+                let block_transactions_var =
+                    self.get_input_mut::<Vec<Tx>>(&instruction.inputs, 0)?;
+                block_transactions_var.push(coinbase_tx_var.tx);
+            }
             Operation::EndBlockTransactions => {
                 let block_transactions_var = self.get_input::<Vec<Tx>>(&instruction.inputs, 0)?;
                 self.append_variable(block_transactions_var.clone());
@@ -838,31 +974,7 @@ impl Compiler {
         let block_version_var = self.get_input::<i32>(&instruction.inputs, 2)?;
         let block_transactions_var = self.get_input::<Vec<Tx>>(&instruction.inputs, 3)?;
 
-        let mut witness = bitcoin::Witness::new();
-        witness.push([0u8; 32]);
-        let mut txdata = vec![Transaction {
-            version: transaction::Version(1),
-            lock_time: bitcoin::absolute::LockTime::from_height(0).unwrap(),
-            input: vec![TxIn {
-                previous_output: OutPoint::null(),
-                script_sig: ScriptBuf::builder()
-                    .push_int((header_var.height + 1) as i64)
-                    .push_int(0xFFFFFFFF)
-                    .as_script()
-                    .into(),
-                sequence: Sequence(0xFFFFFFFF),
-                witness,
-            }],
-            output: vec![
-                TxOut {
-                    value: Amount::from_int_btc(25),
-                    script_pubkey: vec![].into(), // TODO
-                },
-                fuzzamoto::test_utils::mining::create_witness_commitment_output(
-                    WitnessMerkleNode::from_raw_hash(Wtxid::all_zeros().into()),
-                ),
-            ],
-        }];
+        let mut txdata: Vec<Transaction> = Vec::new();
         txdata.extend(block_transactions_var.iter().map(|tx| tx.tx.clone()));
 
         let mut block = bitcoin::Block {
