@@ -1,5 +1,5 @@
 [workspace]
-resolver = "3"
+resolver = "2"
 members = [
     "fuzzamoto", "fuzzamoto-cli", "fuzzamoto-ir",
     "fuzzamoto-nyx-sys", "fuzzamoto-scenarios", "fuzzamoto-libafl"
@@ -8,7 +8,7 @@ exclude = [ "vendor/*" ]
 
 [workspace.package]
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 authors = ["Niklas Gögge <n.goeggi@gmail.com>"]
 license = "MIT"
 repository = "https://github.com/dergoegge/fuzzamoto"

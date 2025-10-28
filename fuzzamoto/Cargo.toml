@@ -13,6 +13,7 @@ reproduce =  ["reduced_pow", "inherit_stdout"]
 inherit_stdout = [] # Inherit stdout from the fuzz target(s)
 nyx = ["dep:fuzzamoto-nyx-sys"] # Use the nyx runner
 reduced_pow = [] # Use reduced POW for block generation
+desocket = [] # Use in-memory transport instead of real TCP sockets
 
 [dependencies]
 bitcoin = "0.32.0"
