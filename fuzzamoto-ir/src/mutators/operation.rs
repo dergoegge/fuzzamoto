@@ -2,6 +2,7 @@ use std::{time::Duration, u64};
 
 use super::{Mutator, MutatorResult};
 use crate::{Operation, Program};
+use bitcoin::{NetworkKind, PrivateKey};
 
 use rand::{
     Rng, RngCore,
@@ -106,8 +107,13 @@ impl<R: RngCore, M: OperationByteMutator> Mutator<R> for OperationMutator<M> {
 
             Operation::LoadPrivateKey(current_key) => {
                 let mut new_key: Vec<u8> = current_key.into();
-                self.byte_array_mutator.mutate_bytes(&mut new_key);
-                new_key.resize(32, 0);
+                loop {
+                    self.byte_array_mutator.mutate_bytes(&mut new_key);
+                    new_key.resize(32, 0);
+                    if PrivateKey::from_slice(&new_key, NetworkKind::Main).is_ok() {
+                        break;
+                    }
+                }
                 Operation::LoadPrivateKey(new_key.try_into().unwrap())
             }
             Operation::LoadSigHashFlags(current_flags) => Operation::LoadSigHashFlags(
