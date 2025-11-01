@@ -51,7 +51,8 @@ RUN cd AFL_Runner && cargo install --path .
 RUN mkdir -p /root/.config/tmux/ && \
   echo "set -g prefix C-y" > /root/.config/tmux/tmux.conf
 
-# Clone AFLplusplus and build
+WORKDIR /
+  # Clone AFLplusplus and build
 ENV LLVM_CONFIG=llvm-config-${LLVM_V}
 RUN git clone https://github.com/AFLplusplus/AFLplusplus
 RUN cd AFLplusplus && make PERFORMANCE=1 install -j$(nproc --ignore 1)
@@ -67,12 +68,11 @@ ARG REPO=bitcoin
 ARG BRANCH=master
 RUN git clone --depth 1 --branch $BRANCH https://github.com/$OWNER/$REPO.git
 
-ENV CC=$PWD/AFLplusplus/afl-clang-fast
-ENV CXX=$PWD/AFLplusplus/afl-clang-fast++
+ENV CC=/AFLplusplus/afl-clang-fast
+ENV CXX=/AFLplusplus/afl-clang-fast++
 
 ENV SOURCES_PATH=/tmp/bitcoin-depends
 RUN make -C bitcoin/depends NO_QT=1 NO_ZMQ=1 NO_USDT=1 download-linux SOURCES_PATH=$SOURCES_PATH
-# Keep extracted source 
 RUN sed -i --regexp-extended '/.*rm -rf .*extract_dir.*/d' ./bitcoin/depends/funcs.mk && \
     make -C ./bitcoin/depends DEBUG=1 NO_QT=1 NO_ZMQ=1 NO_USDT=1 \
       SOURCES_PATH=$SOURCES_PATH \
@@ -94,60 +94,3 @@ RUN cmake --build bitcoin/build_fuzz -j$(nproc) --target bitcoind
 
 ENV CC=clang-${LLVM_V}
 ENV CXX=clang++-${LLVM_V}
-
-WORKDIR /fuzzamoto/fuzzamoto-nyx-sys
-COPY ./fuzzamoto-nyx-sys/Cargo.toml .
-COPY ./fuzzamoto-nyx-sys/src/ src/
-COPY ./fuzzamoto-nyx-sys/build.rs .
-
-WORKDIR /fuzzamoto/fuzzamoto
-COPY ./fuzzamoto/Cargo.toml .
-COPY ./fuzzamoto/src/ src/
-
-WORKDIR /fuzzamoto/fuzzamoto-cli
-COPY ./fuzzamoto-cli/Cargo.toml .
-COPY ./fuzzamoto-cli/src/ src/
-
-WORKDIR /fuzzamoto/fuzzamoto-ir
-COPY ./fuzzamoto-ir/Cargo.toml .
-COPY ./fuzzamoto-ir/src/ src/
-
-WORKDIR /fuzzamoto/fuzzamoto-libafl
-COPY ./fuzzamoto-libafl/Cargo.toml .
-COPY ./fuzzamoto-libafl/src/ src/
-
-WORKDIR /fuzzamoto/fuzzamoto-scenarios
-COPY ./fuzzamoto-scenarios/Cargo.toml .
-COPY ./fuzzamoto-scenarios/bin/ bin/
-
-WORKDIR /fuzzamoto
-COPY ./Cargo.toml .
-RUN mkdir .cargo && cargo vendor > .cargo/config
-
-ENV BITCOIND_PATH=/bitcoin/build_fuzz/bin/bitcoind
-RUN cargo build --package fuzzamoto-scenarios --package fuzzamoto-cli \
-  --verbose --features "fuzzamoto/fuzz,fuzzamoto-scenarios/fuzz" --release
-
-# Build the crash handler
-#   -D_GNU_SOURCE & -ldl for `#include <dlfcn.h>`
-#   -DNO_PT_NYX for nyx's compile-time instrumentation mode
-RUN clang-${LLVM_V} -fPIC -DENABLE_NYX -D_GNU_SOURCE -DNO_PT_NYX \
-    ./fuzzamoto-nyx-sys/src/nyx-crash-handler.c -ldl -I. -shared -o libnyx_crash_handler.so
-
-# ------ Create the nyx share dir ------
-
-WORKDIR /
-
-# Create share dir and copy runtime deps into it for each scenario
-RUN for scenario in /fuzzamoto/target/release/scenario-*; do \
-      if [ -f "$scenario" ] && [ -x "$scenario" ]; then \
-      scenario_name=$(basename $scenario); \
-      export SCENARIO_NYX_DIR="/tmp/fuzzamoto_${scenario_name}"; \
-      /fuzzamoto/target/release/fuzzamoto-cli init \
-        --sharedir $SCENARIO_NYX_DIR \
-        --crash-handler ./fuzzamoto/libnyx_crash_handler.so \
-        --bitcoind bitcoin/build_fuzz/bin/bitcoind \
-        --scenario $scenario \
-        --nyx-dir /AFLplusplus/nyx_mode; \
-      fi \
-    done
