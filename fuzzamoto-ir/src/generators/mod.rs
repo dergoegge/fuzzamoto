@@ -1,3 +1,4 @@
+pub mod add_connection;
 pub mod advance_time;
 pub mod block;
 pub mod compact_filters;
@@ -7,6 +8,7 @@ pub mod tx;
 pub mod txo;
 pub mod witness;
 
+pub use add_connection::*;
 pub use advance_time::*;
 pub use block::*;
 pub use compact_filters::*;

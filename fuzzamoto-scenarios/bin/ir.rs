@@ -194,8 +194,31 @@ where
     }
 
     fn process_actions(&mut self, actions: Vec<CompiledAction>) {
+
+        let handshake_opts = fuzzamoto::connections::HandshakeOpts {
+            time: self.inner.time as i64,
+            relay: true,
+            starting_height: 200,
+            wtxidrelay: true,
+            addrv2: true,
+            erlay: false,
+        };
+
         for action in actions {
             match action {
+                CompiledAction::Connect(_node, connection_type) => {
+                    let conn_type = match connection_type.as_str() {
+                        "inbound" => fuzzamoto::connections::ConnectionType::Inbound,
+                        "outbound" => fuzzamoto::connections::ConnectionType::Outbound,
+                        _ => continue,
+                    };
+
+                    if let Ok(mut connection) = self.inner.target.connect(conn_type) {
+                        if connection.version_handshake(handshake_opts.clone()).is_ok() {
+                            self.inner.connections.push(connection);
+                        }
+                    }
+                }
                 CompiledAction::SendRawMessage(from, command, message) => {
                     if self.inner.connections.is_empty() {
                         return;
@@ -216,7 +239,6 @@ where
                     #[cfg(any(feature = "oracle_netsplit", feature = "oracle_consensus"))]
                     let _ = self.second.set_mocktime(time);
                 }
-                _ => {}
             }
         }
     }
