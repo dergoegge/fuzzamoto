@@ -97,6 +97,10 @@ where
             .map(|m| m.list.clone())
             .unwrap_or(vec![]);
 
+        if novelties.is_empty() {
+            return Ok(());
+        }
+
         let mut success = false;
         let mut current_ir = state.current_input_cloned()?;
 

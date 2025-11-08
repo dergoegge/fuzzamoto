@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <dlfcn.h>
 #include <execinfo.h>
 #include <inttypes.h>
@@ -186,4 +187,13 @@ void nyx_release() { kAFL_hypercall(HYPERCALL_KAFL_RELEASE, 0); }
 /** Indicate a crash (including a message) to the fuzzer. */
 void nyx_fail(const char *message) {
   kAFL_hypercall(HYPERCALL_KAFL_PANIC_EXTENDED, (uintptr_t)message);
+}
+
+void nyx_println(const char *message, size_t message_len) {
+  assert(message_len < HPRINTF_MAX_SIZE);
+  // Subtract one to accomodate the line ending
+  char message_copy[HPRINTF_MAX_SIZE - 1];
+  memset(message_copy, 0, sizeof(message_copy));
+  memcpy(message_copy, message, message_len);
+  hprintf("%s\n", message_copy);
 }
