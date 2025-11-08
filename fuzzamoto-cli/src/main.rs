@@ -20,26 +20,9 @@ enum Commands {
     Init {
         #[arg(long, help = "Path to the nyx share directory that should be created")]
         sharedir: PathBuf,
-        #[arg(
-            long,
-            help = "Path to the crash handler that should be copied into the share directory"
-        )]
-        crash_handler: PathBuf,
-        #[arg(
-            long,
-            help = "Path to the bitcoind binary that should be copied into the share directory"
-        )]
-        bitcoind: PathBuf,
-        #[arg(
-            long,
-            help = "Path to the secondary bitcoind binary that should be copied into the share directory"
-        )]
-        secondary_bitcoind: Option<PathBuf>,
-        #[arg(
-            long,
-            help = "Path to the fuzzamoto scenario binary that should be copied into the share directory"
-        )]
-        scenario: PathBuf,
+
+        #[arg(long, help = "Container image containing the test workload")]
+        image: String,
 
         #[arg(long, help = "Path to the nyx installation")]
         nyx_dir: Option<PathBuf>,
@@ -81,19 +64,9 @@ fn main() -> Result<()> {
     match &cli.command {
         Commands::Init {
             sharedir,
-            crash_handler,
-            bitcoind,
-            secondary_bitcoind,
-            scenario,
+            image,
             nyx_dir,
-        } => InitCommand::execute(
-            sharedir.clone(),
-            crash_handler.clone(),
-            bitcoind.clone(),
-            secondary_bitcoind.clone(),
-            scenario.clone(),
-            nyx_dir.clone(),
-        ),
+        } => InitCommand::execute(sharedir.clone(), image.clone(), nyx_dir.clone()),
         Commands::Coverage {
             output,
             corpus,
