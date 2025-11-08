@@ -1,3 +1,5 @@
+pub mod assertions;
+
 use std::{borrow::Cow, rc::Rc};
 use std::{cell::RefCell, fmt::Debug};
 
@@ -10,6 +12,7 @@ use libafl::{
     feedbacks::{Feedback, StateInitializer},
     state::HasCorpus,
 };
+
 
 use crate::input::IrInput;
 use crate::stages::TimeoutsToVerify;
