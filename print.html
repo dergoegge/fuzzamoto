@@ -83,7 +83,7 @@
 
         <nav id="sidebar" class="sidebar" aria-label="Table of contents">
             <div class="sidebar-scrollbox">
-                <ol class="chapter"><li class="chapter-item expanded affix "><a href="index.html">Introduction</a></li><li class="chapter-item expanded affix "><li class="part-title">Design</li><li class="chapter-item expanded "><a href="design/snapshot-fuzzing.html"><strong aria-hidden="true">1.</strong> Snapshot Fuzzing</a></li><li class="chapter-item expanded "><a href="design/scenarios.html"><strong aria-hidden="true">2.</strong> Scenarios</a></li><li class="chapter-item expanded "><a href="design/ir.html"><strong aria-hidden="true">3.</strong> Intermediate Representation</a></li><li class="chapter-item expanded affix "><li class="part-title">Usage</li><li class="chapter-item expanded "><a href="usage/aflpp.html"><strong aria-hidden="true">4.</strong> Fuzzing with AFL++</a></li><li class="chapter-item expanded "><a href="usage/libafl.html"><strong aria-hidden="true">5.</strong> Fuzzing with fuzzamoto-libafl</a></li><li class="chapter-item expanded "><a href="usage/reproducing.html"><strong aria-hidden="true">6.</strong> Reproducing Testcases</a></li><li class="chapter-item expanded "><a href="usage/target-patches.html"><strong aria-hidden="true">7.</strong> Custom Target Patches</a></li><li class="chapter-item expanded "><a href="usage/coverage.html"><strong aria-hidden="true">8.</strong> Coverage Reports</a></li><li class="chapter-item expanded "><a href="usage/requirements.html"><strong aria-hidden="true">9.</strong> System Requirements</a></li><li class="chapter-item expanded affix "><li class="part-title">Contributing</li><li class="chapter-item expanded "><a href="contributing/integrating.html"><strong aria-hidden="true">10.</strong> Integrating New Targets</a></li><li class="chapter-item expanded "><a href="contributing/scenarios.html"><strong aria-hidden="true">11.</strong> Writing New Scenarios</a></li><li class="chapter-item expanded "><a href="contributing/ir.html"><strong aria-hidden="true">12.</strong> Extending Fuzzamoto IR</a></li></ol>            </div>
+                <ol class="chapter"><li class="chapter-item expanded affix "><a href="index.html">Introduction</a></li><li class="chapter-item expanded affix "><li class="part-title">Design</li><li class="chapter-item expanded "><a href="design/snapshot-fuzzing.html"><strong aria-hidden="true">1.</strong> Snapshot Fuzzing</a></li><li class="chapter-item expanded "><a href="design/scenarios.html"><strong aria-hidden="true">2.</strong> Scenarios</a></li><li class="chapter-item expanded "><a href="design/ir.html"><strong aria-hidden="true">3.</strong> Intermediate Representation</a></li><li class="chapter-item expanded affix "><li class="part-title">Usage</li><li class="chapter-item expanded "><a href="usage/aflpp.html"><strong aria-hidden="true">4.</strong> Fuzzing with AFL++</a></li><li class="chapter-item expanded "><a href="usage/libafl.html"><strong aria-hidden="true">5.</strong> Fuzzing with fuzzamoto-libafl</a></li><li class="chapter-item expanded "><a href="usage/reproducing.html"><strong aria-hidden="true">6.</strong> Reproducing Testcases</a></li><li class="chapter-item expanded "><a href="usage/target-patches.html"><strong aria-hidden="true">7.</strong> Custom Target Patches</a></li><li class="chapter-item expanded "><a href="usage/coverage.html"><strong aria-hidden="true">8.</strong> Coverage Reports</a></li><li class="chapter-item expanded "><a href="usage/requirements.html"><strong aria-hidden="true">9.</strong> System Requirements</a></li><li class="chapter-item expanded "><a href="usage/cli.html"><strong aria-hidden="true">10.</strong> CLI Reference</a></li><li class="chapter-item expanded affix "><li class="part-title">Contributing</li><li class="chapter-item expanded "><a href="contributing/integrating.html"><strong aria-hidden="true">11.</strong> Integrating New Targets</a></li><li class="chapter-item expanded "><a href="contributing/scenarios.html"><strong aria-hidden="true">12.</strong> Writing New Scenarios</a></li><li class="chapter-item expanded "><a href="contributing/ir.html"><strong aria-hidden="true">13.</strong> Extending Fuzzamoto IR</a></li></ol>            </div>
             <div id="sidebar-resize-handle" class="sidebar-resize-handle"></div>
         </nav>
 
@@ -774,6 +774,44 @@ following commands on your host machine:</p>
 sudo modprobe -r kvm
 sudo modprobe  kvm enable_vmware_backdoor=y
 sudo modprobe  kvm-intel # or kvm-amd
+</code></pre>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="cli-reference"><a class="header" href="#cli-reference">CLI Reference</a></h1>
+<p>This page covers a few handy <code>fuzzamoto-cli</code> workflows. The CLI is built from the
+<code>fuzzamoto-cli</code> crate in this repository and provides utilities for working with
+IR corpora, scenarios, and coverage reports.</p>
+<h2 id="generate-ircontext"><a class="header" href="#generate-ircontext">Generate <code>ir.context</code></a></h2>
+<p>The CLI’s <code>--context</code> flag expects a context file dumped by the IR scenario. You can produce one outside Nyx as follows:</p>
+<pre><code class="language-bash">cargo build --release -p fuzzamoto-scenarios --bin scenario-ir
+
+DUMP_CONTEXT=/tmp/ir.context \
+FUZZAMOTO_INPUT=/dev/null \
+RUST_LOG=info \
+target/release/scenario-ir /path/to/instrumented/bitcoind
+</code></pre>
+<p>After this run, <code>/tmp/ir.context</code> contains the serialized <code>FullProgramContext</code> used by generators and fuzzing campaigns.</p>
+<h2 id="generate-a-sample-ir-program"><a class="header" href="#generate-a-sample-ir-program">Generate a sample IR program</a></h2>
+<p>Most commands operate on IR programs (<code>.ir</code> postcard files). You can generate a
+single sample program using the IR generators:</p>
+<pre><code class="language-bash">cargo run -p fuzzamoto-cli -- ir generate \
+  --context /path/to/share/dump/ir.context \
+  --output /tmp/ir-samples \
+  --programs 1 --iterations 8
+</code></pre>
+<p>This writes a single <code>*.ir</code> file under <code>/tmp/ir-samples</code>.</p>
+<h2 id="inspect-an-ir-program"><a class="header" href="#inspect-an-ir-program">Inspect an IR program</a></h2>
+<p>To print the human-readable SSA form:</p>
+<pre><code class="language-bash">cargo run -p fuzzamoto-cli -- ir print /tmp/ir-samples/&lt;file&gt;.ir
+</code></pre>
+<p>Pass <code>--json</code> to emit JSON instead.</p>
+<h2 id="selecting-generators"><a class="header" href="#selecting-generators">Selecting generators</a></h2>
+<p><code>ir generate</code> enables a handful of generators by default. You can restrict the
+set via <code>--generators</code> using the generator names exposed by the IR crate (e.g.,
+<code>AdvanceTimeGenerator</code>, <code>HeaderGenerator</code>, <code>BlockGenerator</code>):</p>
+<pre><code class="language-bash">cargo run -p fuzzamoto-cli -- ir generate \
+  --context /path/to/share/dump/ir.context \
+  --output /tmp/ir-samples \
+  --generators AdvanceTimeGenerator,BlockGenerator \
+  --programs 16 --iterations 8
 </code></pre>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="integrating-new-targets"><a class="header" href="#integrating-new-targets">Integrating New Targets</a></h1>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="writing-new-scenarios"><a class="header" href="#writing-new-scenarios">Writing New Scenarios</a></h1>

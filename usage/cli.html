@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>System Requirements - Fuzzamoto Documentation</title>
+        <title>CLI Reference - Fuzzamoto Documentation</title>
                 
 
         <!-- Custom HTML head -->
@@ -82,7 +82,7 @@
 
         <nav id="sidebar" class="sidebar" aria-label="Table of contents">
             <div class="sidebar-scrollbox">
-                <ol class="chapter"><li class="chapter-item expanded affix "><a href="../index.html">Introduction</a></li><li class="chapter-item expanded affix "><li class="part-title">Design</li><li class="chapter-item expanded "><a href="../design/snapshot-fuzzing.html"><strong aria-hidden="true">1.</strong> Snapshot Fuzzing</a></li><li class="chapter-item expanded "><a href="../design/scenarios.html"><strong aria-hidden="true">2.</strong> Scenarios</a></li><li class="chapter-item expanded "><a href="../design/ir.html"><strong aria-hidden="true">3.</strong> Intermediate Representation</a></li><li class="chapter-item expanded affix "><li class="part-title">Usage</li><li class="chapter-item expanded "><a href="../usage/aflpp.html"><strong aria-hidden="true">4.</strong> Fuzzing with AFL++</a></li><li class="chapter-item expanded "><a href="../usage/libafl.html"><strong aria-hidden="true">5.</strong> Fuzzing with fuzzamoto-libafl</a></li><li class="chapter-item expanded "><a href="../usage/reproducing.html"><strong aria-hidden="true">6.</strong> Reproducing Testcases</a></li><li class="chapter-item expanded "><a href="../usage/target-patches.html"><strong aria-hidden="true">7.</strong> Custom Target Patches</a></li><li class="chapter-item expanded "><a href="../usage/coverage.html"><strong aria-hidden="true">8.</strong> Coverage Reports</a></li><li class="chapter-item expanded "><a href="../usage/requirements.html" class="active"><strong aria-hidden="true">9.</strong> System Requirements</a></li><li class="chapter-item expanded "><a href="../usage/cli.html"><strong aria-hidden="true">10.</strong> CLI Reference</a></li><li class="chapter-item expanded affix "><li class="part-title">Contributing</li><li class="chapter-item expanded "><a href="../contributing/integrating.html"><strong aria-hidden="true">11.</strong> Integrating New Targets</a></li><li class="chapter-item expanded "><a href="../contributing/scenarios.html"><strong aria-hidden="true">12.</strong> Writing New Scenarios</a></li><li class="chapter-item expanded "><a href="../contributing/ir.html"><strong aria-hidden="true">13.</strong> Extending Fuzzamoto IR</a></li></ol>            </div>
+                <ol class="chapter"><li class="chapter-item expanded affix "><a href="../index.html">Introduction</a></li><li class="chapter-item expanded affix "><li class="part-title">Design</li><li class="chapter-item expanded "><a href="../design/snapshot-fuzzing.html"><strong aria-hidden="true">1.</strong> Snapshot Fuzzing</a></li><li class="chapter-item expanded "><a href="../design/scenarios.html"><strong aria-hidden="true">2.</strong> Scenarios</a></li><li class="chapter-item expanded "><a href="../design/ir.html"><strong aria-hidden="true">3.</strong> Intermediate Representation</a></li><li class="chapter-item expanded affix "><li class="part-title">Usage</li><li class="chapter-item expanded "><a href="../usage/aflpp.html"><strong aria-hidden="true">4.</strong> Fuzzing with AFL++</a></li><li class="chapter-item expanded "><a href="../usage/libafl.html"><strong aria-hidden="true">5.</strong> Fuzzing with fuzzamoto-libafl</a></li><li class="chapter-item expanded "><a href="../usage/reproducing.html"><strong aria-hidden="true">6.</strong> Reproducing Testcases</a></li><li class="chapter-item expanded "><a href="../usage/target-patches.html"><strong aria-hidden="true">7.</strong> Custom Target Patches</a></li><li class="chapter-item expanded "><a href="../usage/coverage.html"><strong aria-hidden="true">8.</strong> Coverage Reports</a></li><li class="chapter-item expanded "><a href="../usage/requirements.html"><strong aria-hidden="true">9.</strong> System Requirements</a></li><li class="chapter-item expanded "><a href="../usage/cli.html" class="active"><strong aria-hidden="true">10.</strong> CLI Reference</a></li><li class="chapter-item expanded affix "><li class="part-title">Contributing</li><li class="chapter-item expanded "><a href="../contributing/integrating.html"><strong aria-hidden="true">11.</strong> Integrating New Targets</a></li><li class="chapter-item expanded "><a href="../contributing/scenarios.html"><strong aria-hidden="true">12.</strong> Writing New Scenarios</a></li><li class="chapter-item expanded "><a href="../contributing/ir.html"><strong aria-hidden="true">13.</strong> Extending Fuzzamoto IR</a></li></ol>            </div>
             <div id="sidebar-resize-handle" class="sidebar-resize-handle"></div>
         </nav>
 
@@ -143,43 +143,54 @@
 
                 <div id="content" class="content">
                     <main>
-                        <h1 id="system-requirements"><a class="header" href="#system-requirements">System Requirements</a></h1>
-<p>For testcase reproduction (see <a href="./reproducing.html">Reproducing Testcases</a>), no
-hardware restrictions with regard to architecture should exist. A linux operating
-system is required.</p>
-<p>For fuzzing, a bare metal x86_64 architecture and linux operating system are
-required. At least 32GB of RAM are recommended.</p>
-<p>Fuzzamoto has been tested on the following hardware:</p>
-<p><code>Hetzner AX 102</code>:</p>
-<ul>
-<li>AMD Ryzen 9 7950X3D 16-Core Processor</li>
-<li>128GB RAM</li>
-</ul>
-<p><code>Intel machine</code>:</p>
-<ul>
-<li>13th Gen Intel(R) Core(TM) i9-13900K</li>
-<li>128GB RAM</li>
-</ul>
-<p><em>If you have a machine that you've successfully fuzzed with Fuzzamoto, please
-share it with us, so we can refine the system requirements!</em></p>
-<h2 id="vmware-backdoor"><a class="header" href="#vmware-backdoor">VMware backdoor</a></h2>
-<p>Nyx requires the kvm vmware backdoor to be enabled. This can be done using the
-following commands on your host machine:</p>
-<pre><code>sudo modprobe -r kvm-intel # or kvm-amd
-sudo modprobe -r kvm
-sudo modprobe  kvm enable_vmware_backdoor=y
-sudo modprobe  kvm-intel # or kvm-amd
+                        <h1 id="cli-reference"><a class="header" href="#cli-reference">CLI Reference</a></h1>
+<p>This page covers a few handy <code>fuzzamoto-cli</code> workflows. The CLI is built from the
+<code>fuzzamoto-cli</code> crate in this repository and provides utilities for working with
+IR corpora, scenarios, and coverage reports.</p>
+<h2 id="generate-ircontext"><a class="header" href="#generate-ircontext">Generate <code>ir.context</code></a></h2>
+<p>The CLI’s <code>--context</code> flag expects a context file dumped by the IR scenario. You can produce one outside Nyx as follows:</p>
+<pre><code class="language-bash">cargo build --release -p fuzzamoto-scenarios --bin scenario-ir
+
+DUMP_CONTEXT=/tmp/ir.context \
+FUZZAMOTO_INPUT=/dev/null \
+RUST_LOG=info \
+target/release/scenario-ir /path/to/instrumented/bitcoind
+</code></pre>
+<p>After this run, <code>/tmp/ir.context</code> contains the serialized <code>FullProgramContext</code> used by generators and fuzzing campaigns.</p>
+<h2 id="generate-a-sample-ir-program"><a class="header" href="#generate-a-sample-ir-program">Generate a sample IR program</a></h2>
+<p>Most commands operate on IR programs (<code>.ir</code> postcard files). You can generate a
+single sample program using the IR generators:</p>
+<pre><code class="language-bash">cargo run -p fuzzamoto-cli -- ir generate \
+  --context /path/to/share/dump/ir.context \
+  --output /tmp/ir-samples \
+  --programs 1 --iterations 8
+</code></pre>
+<p>This writes a single <code>*.ir</code> file under <code>/tmp/ir-samples</code>.</p>
+<h2 id="inspect-an-ir-program"><a class="header" href="#inspect-an-ir-program">Inspect an IR program</a></h2>
+<p>To print the human-readable SSA form:</p>
+<pre><code class="language-bash">cargo run -p fuzzamoto-cli -- ir print /tmp/ir-samples/&lt;file&gt;.ir
+</code></pre>
+<p>Pass <code>--json</code> to emit JSON instead.</p>
+<h2 id="selecting-generators"><a class="header" href="#selecting-generators">Selecting generators</a></h2>
+<p><code>ir generate</code> enables a handful of generators by default. You can restrict the
+set via <code>--generators</code> using the generator names exposed by the IR crate (e.g.,
+<code>AdvanceTimeGenerator</code>, <code>HeaderGenerator</code>, <code>BlockGenerator</code>):</p>
+<pre><code class="language-bash">cargo run -p fuzzamoto-cli -- ir generate \
+  --context /path/to/share/dump/ir.context \
+  --output /tmp/ir-samples \
+  --generators AdvanceTimeGenerator,BlockGenerator \
+  --programs 16 --iterations 8
 </code></pre>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                                                    <a rel="prev" href="../usage/coverage.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                                    <a rel="prev" href="../usage/requirements.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <i class="fa fa-angle-left"></i>
                             </a>
                         
-                                                    <a rel="next" href="../usage/cli.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                                    <a rel="next" href="../contributing/integrating.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <i class="fa fa-angle-right"></i>
                             </a>
                         
@@ -189,11 +200,11 @@ sudo modprobe  kvm-intel # or kvm-amd
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                                    <a rel="prev" href="../usage/coverage.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                    <a rel="prev" href="../usage/requirements.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <i class="fa fa-angle-left"></i>
                     </a>
                 
-                                    <a rel="next" href="../usage/cli.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                    <a rel="next" href="../contributing/integrating.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <i class="fa fa-angle-right"></i>
                     </a>
                             </nav>
