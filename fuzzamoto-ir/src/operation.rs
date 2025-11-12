@@ -1,4 +1,4 @@
-use crate::{ProgramValidationError, Variable};
+use crate::{AddrRecord, ProgramValidationError, Variable};
 
 use std::{fmt, time::Duration};
 
@@ -17,6 +17,7 @@ pub enum Operation {
     LoadConnection(usize),
     LoadConnectionType(String),
     LoadDuration(Duration),
+    LoadAddr(AddrRecord),
     LoadTime(u64),
     LoadAmount(u64),
     LoadSize(usize), // Size in bytes
@@ -127,9 +128,20 @@ pub enum Operation {
     AddBlockWithWitnessInv, // Block by hash with witness
     AddFilteredBlockInv,    // SPV proof by block hash for txs matching filter
 
+    /// Address list building
+    BeginBuildAddrList,
+    EndBuildAddrList,
+    AddAddr,
+    BeginBuildAddrListV2,
+    EndBuildAddrListV2,
+    AddAddrV2,
+
     /// Message sending
     SendGetData,
     SendInv,
+    SendGetAddr,
+    SendAddr,
+    SendAddrV2,
     SendTx,
     SendTxNoWit,
     SendHeader,
@@ -171,6 +183,29 @@ impl fmt::Display for Operation {
                 write!(f, "LoadConnectionType(\"{}\")", connection_type)
             }
             Operation::LoadDuration(duration) => write!(f, "LoadDuration({})", duration.as_secs()),
+            Operation::LoadAddr(addr) => match addr {
+                AddrRecord::V1 {
+                    time,
+                    services,
+                    port,
+                    ..
+                } => write!(
+                    f,
+                    "LoadAddr({}, {}, {})",
+                    time, services, port
+                ),
+                AddrRecord::V2 {
+                    time,
+                    services,
+                    network,
+                    port,
+                    ..
+                } => write!(
+                    f,
+                    "LoadAddrV2({}, {}, {}, {})",
+                    time, services, network, port
+                ),
+            },
             Operation::LoadBlockHeight(height) => write!(f, "LoadBlockHeight({})", height),
             Operation::LoadCompactFilterType(filter_type) => {
                 write!(f, "LoadCompactFilterType({})", filter_type)
@@ -287,6 +322,12 @@ impl fmt::Display for Operation {
             Operation::AddBlockInv => write!(f, "AddBlockInv"),
             Operation::AddBlockWithWitnessInv => write!(f, "AddBlockWithWitnessInv"),
             Operation::AddFilteredBlockInv => write!(f, "AddFilteredBlockInv"),
+            Operation::BeginBuildAddrList => write!(f, "BeginBuildAddrList"),
+            Operation::EndBuildAddrList => write!(f, "EndBuildAddrList"),
+            Operation::AddAddr => write!(f, "AddAddr"),
+            Operation::BeginBuildAddrListV2 => write!(f, "BeginBuildAddrListV2"),
+            Operation::EndBuildAddrListV2 => write!(f, "EndBuildAddrListV2"),
+            Operation::AddAddrV2 => write!(f, "AddAddrV2"),
 
             Operation::BeginBlockTransactions => write!(f, "BeginBlockTransactions"),
             Operation::EndBlockTransactions => write!(f, "EndBlockTransactions"),
@@ -295,6 +336,9 @@ impl fmt::Display for Operation {
 
             Operation::SendGetData => write!(f, "SendGetData"),
             Operation::SendInv => write!(f, "SendInv"),
+            Operation::SendGetAddr => write!(f, "SendGetAddr"),
+            Operation::SendAddr => write!(f, "SendAddr"),
+            Operation::SendAddrV2 => write!(f, "SendAddrV2"),
             Operation::SendTx => write!(f, "SendTx"),
             Operation::SendTxNoWit => write!(f, "SendTxNoWit"),
             Operation::SendHeader => write!(f, "SendHeader"),
@@ -333,6 +377,8 @@ impl Operation {
             Operation::AddTxidWithWitnessInv if index == 0 => true,
             Operation::AddWtxidInv if index == 0 => true,
             Operation::AddTx if index == 0 => true,
+            Operation::AddAddr if index == 0 => true,
+            Operation::AddAddrV2 if index == 0 => true,
             _ => false,
         }
     }
@@ -341,6 +387,8 @@ impl Operation {
         match self {
             Operation::BeginBuildTx
             | Operation::BeginBuildInventory
+            | Operation::BeginBuildAddrList
+            | Operation::BeginBuildAddrListV2
             | Operation::BeginBuildTxInputs
             | Operation::BeginBuildTxOutputs
             | Operation::BeginWitnessStack
@@ -356,6 +404,7 @@ impl Operation {
             | Operation::LoadConnection(_)
             | Operation::LoadConnectionType(_)
             | Operation::LoadDuration(_)
+            | Operation::LoadAddr(_)
             | Operation::LoadBlockHeight(_)
             | Operation::LoadCompactFilterType(_)
             | Operation::SendRawMessage
@@ -391,12 +440,19 @@ impl Operation {
             | Operation::EndBuildTxInputs
             | Operation::EndBuildTxOutputs
             | Operation::EndBuildInventory
+            | Operation::EndBuildAddrList
+            | Operation::EndBuildAddrListV2
             | Operation::AddCompactBlockInv
             | Operation::AddTxidInv
             | Operation::AddTxidWithWitnessInv
             | Operation::AddWtxidInv
+            | Operation::AddAddr
+            | Operation::AddAddrV2
             | Operation::SendGetData
             | Operation::SendInv
+            | Operation::SendGetAddr
+            | Operation::SendAddr
+            | Operation::SendAddrV2
             | Operation::AddTxInput
             | Operation::AddTxOutput
             | Operation::TakeTxo
@@ -439,6 +495,8 @@ impl Operation {
             | (Operation::BeginBuildTxInputs, Operation::EndBuildTxInputs)
             | (Operation::BeginBuildTxOutputs, Operation::EndBuildTxOutputs)
             | (Operation::BeginBuildInventory, Operation::EndBuildInventory)
+            | (Operation::BeginBuildAddrList, Operation::EndBuildAddrList)
+            | (Operation::BeginBuildAddrListV2, Operation::EndBuildAddrListV2)
             | (Operation::BeginWitnessStack, Operation::EndWitnessStack)
             | (Operation::BeginBlockTransactions, Operation::EndBlockTransactions)
             | (Operation::BeginBuildFilterLoad, Operation::EndBuildFilterLoad)
@@ -456,6 +514,8 @@ impl Operation {
             | Operation::EndBuildTxInputs
             | Operation::EndBuildTxOutputs
             | Operation::EndBuildInventory
+            | Operation::EndBuildAddrList
+            | Operation::EndBuildAddrListV2
             | Operation::EndWitnessStack
             | Operation::EndBlockTransactions
             | Operation::EndBuildFilterLoad
@@ -469,6 +529,7 @@ impl Operation {
             | Operation::LoadConnection(_)
             | Operation::LoadConnectionType(_)
             | Operation::LoadDuration(_)
+            | Operation::LoadAddr(_)
             | Operation::LoadBlockHeight(_)
             | Operation::LoadCompactFilterType(_)
             | Operation::SendRawMessage
@@ -504,10 +565,14 @@ impl Operation {
             | Operation::BeginWitnessStack
             | Operation::AddWitness
             | Operation::BeginBuildInventory
+            | Operation::BeginBuildAddrList
+            | Operation::BeginBuildAddrListV2
             | Operation::AddCompactBlockInv
             | Operation::AddTxidInv
             | Operation::AddTxidWithWitnessInv
             | Operation::AddWtxidInv
+            | Operation::AddAddr
+            | Operation::AddAddrV2
             | Operation::BuildBlock
             | Operation::AddBlockInv
             | Operation::AddBlockWithWitnessInv
@@ -516,6 +581,9 @@ impl Operation {
             | Operation::BeginBlockTransactions
             | Operation::SendGetData
             | Operation::SendInv
+            | Operation::SendGetAddr
+            | Operation::SendAddr
+            | Operation::SendAddrV2
             | Operation::SendTx
             | Operation::SendTxNoWit
             | Operation::SendHeader
@@ -585,6 +653,7 @@ impl Operation {
             Operation::LoadConnection(_) => vec![Variable::Connection],
             Operation::LoadConnectionType(_) => vec![Variable::ConnectionType],
             Operation::LoadDuration(_) => vec![Variable::Duration],
+            Operation::LoadAddr(_) => vec![Variable::AddrRecord],
             Operation::LoadBlockHeight(_) => vec![Variable::BlockHeight],
             Operation::LoadCompactFilterType(_) => vec![Variable::CompactFilterType],
             Operation::SendRawMessage => vec![],
@@ -648,6 +717,13 @@ impl Operation {
             Operation::AddBlockWithWitnessInv => vec![],
             Operation::AddFilteredBlockInv => vec![],
 
+            Operation::BeginBuildAddrList => vec![],
+            Operation::EndBuildAddrList => vec![Variable::ConstAddrList],
+            Operation::AddAddr => vec![],
+            Operation::BeginBuildAddrListV2 => vec![],
+            Operation::EndBuildAddrListV2 => vec![Variable::ConstAddrListV2],
+            Operation::AddAddrV2 => vec![],
+
             Operation::BeginWitnessStack => vec![],
             Operation::EndWitnessStack => vec![Variable::ConstWitnessStack],
             Operation::AddWitness => vec![],
@@ -661,6 +737,9 @@ impl Operation {
             Operation::SendTxNoWit => vec![],
             Operation::SendGetData => vec![],
             Operation::SendInv => vec![],
+            Operation::SendGetAddr => vec![],
+            Operation::SendAddr => vec![],
+            Operation::SendAddrV2 => vec![],
             Operation::SendHeader => vec![],
             Operation::SendBlock => vec![],
             Operation::SendBlockNoWit => vec![],
@@ -731,6 +810,8 @@ impl Operation {
                 vec![Variable::Connection, Variable::ConstTx]
             }
             Operation::EndBuildInventory => vec![Variable::MutInventory],
+            Operation::EndBuildAddrList => vec![Variable::MutAddrList],
+            Operation::EndBuildAddrListV2 => vec![Variable::MutAddrListV2],
             Operation::AddCompactBlockInv => vec![Variable::MutInventory, Variable::Block],
             Operation::AddTxidInv | Operation::AddTxidWithWitnessInv | Operation::AddWtxidInv => {
                 vec![Variable::MutInventory, Variable::ConstTx]
@@ -740,6 +821,8 @@ impl Operation {
             | Operation::AddFilteredBlockInv => {
                 vec![Variable::MutInventory, Variable::Block]
             }
+            Operation::AddAddr => vec![Variable::MutAddrList, Variable::AddrRecord],
+            Operation::AddAddrV2 => vec![Variable::MutAddrListV2, Variable::AddrRecord],
             Operation::BuildBlock => vec![
                 Variable::CoinbaseTx,
                 Variable::Header,
@@ -752,6 +835,9 @@ impl Operation {
             Operation::SendGetData | Operation::SendInv => {
                 vec![Variable::Connection, Variable::ConstInventory]
             }
+            Operation::SendGetAddr => vec![Variable::Connection],
+            Operation::SendAddr => vec![Variable::Connection, Variable::ConstAddrList],
+            Operation::SendAddrV2 => vec![Variable::Connection, Variable::ConstAddrListV2],
             Operation::SendHeader => vec![Variable::Connection, Variable::Header],
             Operation::SendBlock | Operation::SendBlockNoWit => {
                 vec![Variable::Connection, Variable::Block]
@@ -792,6 +878,7 @@ impl Operation {
             | Operation::LoadConnection(_)
             | Operation::LoadConnectionType(_)
             | Operation::LoadDuration(_)
+            | Operation::LoadAddr(_)
             | Operation::LoadBlockHeight(_)
             | Operation::LoadCompactFilterType(_)
             | Operation::LoadTime(_)
@@ -809,6 +896,8 @@ impl Operation {
             | Operation::LoadFilterAdd { .. }
             | Operation::BeginBuildTxInputs
             | Operation::BeginBuildInventory
+            | Operation::BeginBuildAddrList
+            | Operation::BeginBuildAddrListV2
             | Operation::BeginBlockTransactions
             | Operation::BeginWitnessStack
             | Operation::BuildPayToAnchor => vec![],
@@ -822,6 +911,8 @@ impl Operation {
             Operation::BeginBuildTxOutputs => vec![Variable::MutTxOutputs],
             Operation::BeginWitnessStack => vec![Variable::MutWitnessStack],
             Operation::BeginBuildInventory => vec![Variable::MutInventory],
+            Operation::BeginBuildAddrList => vec![Variable::MutAddrList],
+            Operation::BeginBuildAddrListV2 => vec![Variable::MutAddrListV2],
             Operation::BeginBlockTransactions => vec![Variable::MutBlockTransactions],
             Operation::BeginBuildFilterLoad => vec![Variable::MutFilterLoad],
             Operation::BeginBuildCoinbaseTx => vec![Variable::MutTx],
@@ -837,6 +928,7 @@ impl Operation {
             | Operation::LoadConnection(_)
             | Operation::LoadConnectionType(_)
             | Operation::LoadDuration(_)
+            | Operation::LoadAddr(_)
             | Operation::LoadBlockHeight(_)
             | Operation::LoadCompactFilterType(_)
             | Operation::SendRawMessage
@@ -877,10 +969,14 @@ impl Operation {
             | Operation::EndWitnessStack
             | Operation::AddWitness
             | Operation::EndBuildInventory
+            | Operation::EndBuildAddrList
+            | Operation::EndBuildAddrListV2
             | Operation::AddCompactBlockInv
             | Operation::AddTxidInv
             | Operation::AddTxidWithWitnessInv
             | Operation::AddWtxidInv
+            | Operation::AddAddr
+            | Operation::AddAddrV2
             | Operation::AddBlockInv
             | Operation::AddBlockWithWitnessInv
             | Operation::AddFilteredBlockInv
@@ -889,6 +985,9 @@ impl Operation {
             | Operation::EndBlockTransactions
             | Operation::SendGetData
             | Operation::SendInv
+            | Operation::SendGetAddr
+            | Operation::SendAddr
+            | Operation::SendAddrV2
             | Operation::SendTx
             | Operation::SendTxNoWit
             | Operation::SendHeader
