@@ -3,12 +3,12 @@ use std::path::PathBuf;
 
 use fuzzamoto_ir::compiler::Compiler;
 use fuzzamoto_ir::{
-    AddTxToBlockGenerator, AdvanceTimeGenerator, BlockGenerator, BloomFilterAddGenerator,
-    BloomFilterClearGenerator, BloomFilterLoadGenerator, CompactFilterQueryGenerator,
-    FullProgramContext, Generator, GetDataGenerator, HeaderGenerator, InstructionContext,
-    InventoryGenerator, LargeTxGenerator, LongChainGenerator, OneParentOneChildGenerator, Program,
-    ProgramBuilder, SendBlockGenerator, SendMessageGenerator, SingleTxGenerator, TxoGenerator,
-    WitnessGenerator, AddrRelayGenerator, AddrRelayV2Generator, GetAddrGenerator
+    AddTxToBlockGenerator, AddrRelayGenerator, AddrRelayV2Generator, AdvanceTimeGenerator,
+    BlockGenerator, BloomFilterAddGenerator, BloomFilterClearGenerator, BloomFilterLoadGenerator,
+    CompactFilterQueryGenerator, FullProgramContext, Generator, GetAddrGenerator, GetDataGenerator,
+    HeaderGenerator, InstructionContext, InventoryGenerator, LargeTxGenerator, LongChainGenerator,
+    OneParentOneChildGenerator, Program, ProgramBuilder, SendBlockGenerator, SendMessageGenerator,
+    SingleTxGenerator, TxoGenerator, WitnessGenerator,
 };
 
 use rand::Rng;

@@ -24,7 +24,10 @@ use bitcoin::{
 
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 
-use crate::{AddrNetwork, AddrRecord, Instruction, Operation, Program, bloom::filter_insert, generators::block::Header};
+use crate::{
+    AddrNetwork, AddrRecord, Instruction, Operation, Program, bloom::filter_insert,
+    generators::block::Header,
+};
 
 /// `Compiler` is responsible for compiling IR into a sequence of low-level actions to be performed
 /// on a node (i.e. mapping `fuzzamoto_ir::Program` -> `CompiledProgram`).

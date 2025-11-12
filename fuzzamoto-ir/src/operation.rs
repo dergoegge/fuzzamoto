@@ -189,11 +189,7 @@ impl fmt::Display for Operation {
                     services,
                     port,
                     ..
-                } => write!(
-                    f,
-                    "LoadAddr({}, {}, {})",
-                    time, services, port
-                ),
+                } => write!(f, "LoadAddr({}, {}, {})", time, services, port),
                 AddrRecord::V2 {
                     time,
                     services,
