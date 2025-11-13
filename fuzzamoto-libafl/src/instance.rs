@@ -31,7 +31,7 @@ use libafl::{
     state::{HasCorpus, HasMaxSize, HasRand, StdState},
 };
 use libafl_bolts::{
-    HasLen, current_nanos,
+    HasLen, Named, current_nanos,
     rands::{Rand, StdRand},
     tuples::tuple_list,
 };
@@ -54,10 +54,10 @@ use crate::stages::BenchStatsStage;
 use libafl::stages::nop::NopStage;
 
 macro_rules! weighted_mutations {
-    ($(($weight:expr, $mutation:expr)),+ $(,)?) => {{
+    ($options:expr, $(($weight:expr, $mutation:expr)),+ $(,)?) => {{
         (
             tuple_list!($($mutation),+),
-            [$(($weight) as f32),+],
+            [$($options.mutator_weight($mutation.name(), $weight)),+],
         )
     }};
 }
@@ -259,6 +259,7 @@ where
 
         //IrSpliceMutator::new(ConcatMutator::new(), rng.clone()),
         let (mutations, weights) = weighted_mutations![
+            self.options,
             (2000.0, IrMutator::new(InputMutator::new(), rng.clone())),
             (
                 1000.0,
