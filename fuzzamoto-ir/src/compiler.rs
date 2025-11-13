@@ -20,7 +20,7 @@ use bitcoin::{
     script::PushBytesBuf,
     secp256k1::{self, Keypair, SecretKey, XOnlyPublicKey},
     sighash::{Prevouts, SighashCache, TapSighashType},
-    taproot::{LeafVersion, TapNodeHash, TaprootBuilder as BitcoinTaprootBuilder},
+    taproot::{LeafVersion, TapLeafHash, TapNodeHash, TaprootBuilder as BitcoinTaprootBuilder},
     transaction,
 };
 
@@ -1614,7 +1614,39 @@ impl Compiler {
                                             .to_string(),
                                     )
                                 })?;
+                            let leaf_version =
+                                LeafVersion::from_consensus(leaf.version).map_err(|e| {
+                                    CompilerError::MiscError(format!(
+                                        "invalid taproot leaf version: {e:?}"
+                                    ))
+                                })?;
+                            let script = Script::from_bytes(&leaf.script);
+                            let leaf_hash = TapLeafHash::from_script(&script, leaf_version);
 
+                            let secret_key =
+                                SecretKey::from_slice(spend_info.keypair.secret_key.as_slice())
+                                    .unwrap();
+                            let keypair = Keypair::from_secret_key(&self.secp_ctx, &secret_key);
+
+                            let prevouts_ref = Prevouts::All(&prevouts);
+                            let sighash = cache
+                                .taproot_script_spend_signature_hash(
+                                    idx,
+                                    &prevouts_ref,
+                                    leaf_hash,
+                                    TapSighashType::Default,
+                                )
+                                .map_err(|e| {
+                                    CompilerError::MiscError(format!(
+                                        "taproot script sighash failed: {e:?}"
+                                    ))
+                                })?;
+                            let msg = secp256k1::Message::from_digest(*sighash.as_byte_array());
+                            let signature = self.secp_ctx.sign_schnorr_no_aux_rand(&msg, &keypair);
+
+                            tx_var.tx.input[idx]
+                                .witness
+                                .push(signature.as_ref().to_vec());
                             tx_var.tx.input[idx].witness.push(leaf.script.clone());
                             tx_var.tx.input[idx]
                                 .witness
