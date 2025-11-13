@@ -132,16 +132,24 @@ where
             .collect()
     }
 
+    fn build_taproot_context(inner: &GenericScenario<TX, T>) -> fuzzamoto_ir::TaprootContext {
+        fuzzamoto_ir::TaprootContext {
+            txos: inner.taproot_txos.clone(),
+        }
+    }
+
     /// Dump the full program context either to Nyx host or to a file
     fn dump_context(
         context: ProgramContext,
         txos: Vec<fuzzamoto_ir::Txo>,
         headers: Vec<fuzzamoto_ir::Header>,
+        taproot: fuzzamoto_ir::TaprootContext,
     ) -> Result<(), String> {
         let full_context = postcard::to_allocvec(&fuzzamoto_ir::FullProgramContext {
             context,
             txos,
             headers,
+            taproot,
         })
         .map_err(|e| e.to_string())?;
 
@@ -327,8 +335,9 @@ where
 
         let txos = Self::build_txos(&inner);
         let headers = Self::build_headers(&inner);
+        let taproot = Self::build_taproot_context(&inner);
 
-        Self::dump_context(context, txos, headers)?;
+        Self::dump_context(context, txos, headers, taproot)?;
 
         #[cfg(any(feature = "oracle_netsplit", feature = "oracle_consensus"))]
         let second = Self::create_and_sync_second_target(args, &inner.target)?;
