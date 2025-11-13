@@ -41,6 +41,9 @@ pub enum Operation {
     LoadTaprootTxo {
         txo: TaprootTxo,
     },
+    LoadTaprootAnnex {
+        annex: Vec<u8>,
+    },
     LoadHeader {
         prev: [u8; 32],
         merkle_root: [u8; 32],
@@ -171,6 +174,8 @@ pub enum Operation {
     },
     TaprootScriptsUseLeaf,
     TaprootTxoUseLeaf,
+    TaprootScriptsUseAnnex,
+    TaprootTxoUseAnnex,
     BeginTaprootTree,
     AddTapLeaf,
     EndTaprootTree,
@@ -262,6 +267,9 @@ impl fmt::Display for Operation {
                 hex_string(&txo.outpoint.0),
                 txo.outpoint.1
             ),
+            Operation::LoadTaprootAnnex { annex } => {
+                write!(f, "LoadTaprootAnnex({})", hex_string(annex))
+            }
             Operation::LoadHeader {
                 prev,
                 merkle_root,
@@ -388,6 +396,8 @@ impl fmt::Display for Operation {
             }
             Operation::TaprootScriptsUseLeaf => write!(f, "TaprootScriptsUseLeaf"),
             Operation::TaprootTxoUseLeaf => write!(f, "TaprootTxoUseLeaf"),
+            Operation::TaprootScriptsUseAnnex => write!(f, "TaprootScriptsUseAnnex"),
+            Operation::TaprootTxoUseAnnex => write!(f, "TaprootTxoUseAnnex"),
             Operation::BeginTaprootTree => write!(f, "BeginTaprootTree"),
             Operation::AddTapLeaf => write!(f, "AddTapLeaf"),
             Operation::EndTaprootTree => write!(f, "EndTaprootTree"),
@@ -469,6 +479,7 @@ impl Operation {
             | Operation::BuildPayToWitnessPubKeyHash
             | Operation::LoadTxo { .. }
             | Operation::LoadTaprootTxo { .. }
+            | Operation::LoadTaprootAnnex { .. }
             | Operation::LoadHeader { .. }
             | Operation::LoadAmount(..)
             | Operation::LoadTxVersion(..)
@@ -537,6 +548,8 @@ impl Operation {
             | Operation::TaprootSpendInfoSelectLeaf { .. }
             | Operation::TaprootScriptsUseLeaf
             | Operation::TaprootTxoUseLeaf
+            | Operation::TaprootScriptsUseAnnex
+            | Operation::TaprootTxoUseAnnex
             | Operation::AddTapLeaf
             | Operation::EndTaprootTree => false,
         }
@@ -610,6 +623,7 @@ impl Operation {
             | Operation::BuildPayToWitnessPubKeyHash
             | Operation::LoadTxo { .. }
             | Operation::LoadTaprootTxo { .. }
+            | Operation::LoadTaprootAnnex { .. }
             | Operation::LoadHeader { .. }
             | Operation::LoadAmount(..)
             | Operation::LoadTxVersion(..)
@@ -628,6 +642,8 @@ impl Operation {
             | Operation::TaprootSpendInfoSelectLeaf { .. }
             | Operation::TaprootScriptsUseLeaf
             | Operation::TaprootTxoUseLeaf
+            | Operation::TaprootScriptsUseAnnex
+            | Operation::TaprootTxoUseAnnex
             | Operation::BeginTaprootTree
             | Operation::AddTapLeaf
             | Operation::BeginBuildTx
@@ -749,6 +765,7 @@ impl Operation {
 
             Operation::LoadTxo { .. } => vec![Variable::Txo],
             Operation::LoadTaprootTxo { .. } => vec![Variable::TaprootTxo],
+            Operation::LoadTaprootAnnex { .. } => vec![Variable::TaprootAnnex],
             Operation::LoadAmount(..) => vec![Variable::ConstAmount],
             Operation::LoadTxVersion(..) => vec![Variable::TxVersion],
             Operation::LoadBlockVersion(..) => vec![Variable::BlockVersion],
@@ -816,6 +833,8 @@ impl Operation {
             Operation::TaprootSpendInfoSelectLeaf { .. } => vec![Variable::TaprootLeaf],
             Operation::TaprootScriptsUseLeaf => vec![Variable::Scripts],
             Operation::TaprootTxoUseLeaf => vec![Variable::Txo],
+            Operation::TaprootScriptsUseAnnex => vec![Variable::Scripts],
+            Operation::TaprootTxoUseAnnex => vec![Variable::Txo],
             Operation::BeginTaprootTree => vec![],
             Operation::AddTapLeaf => vec![],
             Operation::EndTaprootTree => vec![Variable::TaprootSpendInfo],
@@ -974,6 +993,10 @@ impl Operation {
             Operation::TaprootSpendInfoSelectLeaf { .. } => vec![Variable::TaprootSpendInfo],
             Operation::TaprootScriptsUseLeaf => vec![Variable::Scripts, Variable::TaprootLeaf],
             Operation::TaprootTxoUseLeaf => vec![Variable::Txo, Variable::TaprootLeaf],
+            Operation::TaprootScriptsUseAnnex => {
+                vec![Variable::Scripts, Variable::TaprootAnnex]
+            }
+            Operation::TaprootTxoUseAnnex => vec![Variable::Txo, Variable::TaprootAnnex],
             Operation::EndTaprootTree => vec![Variable::MutTaprootTree, Variable::TaprootKeypair],
             Operation::AddTapLeaf => vec![
                 Variable::MutTaprootTree,
@@ -994,6 +1017,7 @@ impl Operation {
             | Operation::LoadTime(_)
             | Operation::LoadTxo { .. }
             | Operation::LoadTaprootTxo { .. }
+            | Operation::LoadTaprootAnnex { .. }
             | Operation::LoadHeader { .. }
             | Operation::LoadAmount(..)
             | Operation::LoadTxVersion(..)
@@ -1065,6 +1089,7 @@ impl Operation {
             | Operation::BuildFilterAddFromTxo
             | Operation::LoadTxo { .. }
             | Operation::LoadTaprootTxo { .. }
+            | Operation::LoadTaprootAnnex { .. }
             | Operation::LoadHeader { .. }
             | Operation::LoadAmount(..)
             | Operation::LoadTxVersion(..)
@@ -1085,6 +1110,8 @@ impl Operation {
             | Operation::TaprootSpendInfoSelectLeaf { .. }
             | Operation::TaprootScriptsUseLeaf
             | Operation::TaprootTxoUseLeaf
+            | Operation::TaprootScriptsUseAnnex
+            | Operation::TaprootTxoUseAnnex
             | Operation::EndBuildTx
             | Operation::EndBuildTxInputs
             | Operation::EndBuildTxOutputs

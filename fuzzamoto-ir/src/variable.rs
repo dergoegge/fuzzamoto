@@ -66,4 +66,5 @@ pub enum Variable {
     TaprootLeaf,
     TaprootLeafVersion,
     MutTaprootTree,
+    TaprootAnnex,
 }
