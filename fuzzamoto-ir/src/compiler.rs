@@ -111,6 +111,24 @@ struct Witness {
 }
 
 #[derive(Clone, Debug)]
+struct TaprootTreeBuilder {
+    leaves: Vec<TaprootTreeLeaf>,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug)]
+struct TaprootTree {
+    leaves: Vec<TaprootTreeLeaf>,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug)]
+struct TaprootTreeLeaf {
+    script: Vec<u8>,
+    version: u8,
+}
+
+#[derive(Clone, Debug)]
 struct Txo {
     prev_out: ([u8; 32], u32),
     scripts: Scripts,
@@ -216,15 +234,13 @@ impl Compiler {
                 Operation::TaprootTxoToSpendInfo
                 | Operation::TaprootTxoToKeypair
                 | Operation::TaprootTxoToTxo => {
-                    self.handle_taproot_operations(&instruction)?;
+                    self.handle_taproot_conversions(&instruction)?;
                 }
-                Operation::BeginTaprootTree
-                | Operation::AddTapLeaf
-                | Operation::EndTaprootTree
-                | Operation::LoadTaprootLeafVersion(_) => {
-                    return Err(CompilerError::MiscError(
-                        "Taproot tree operations are not supported yet".to_string(),
-                    ));
+                Operation::BeginTaprootTree | Operation::AddTapLeaf | Operation::EndTaprootTree => {
+                    self.handle_taproot_tree_operations(&instruction)?;
+                }
+                Operation::LoadTaprootLeafVersion(_) => {
+                    self.handle_load_operations(&instruction)?;
                 }
 
                 Operation::BuildCompactBlock => {
@@ -657,7 +673,7 @@ impl Compiler {
         Ok(())
     }
 
-    fn handle_compact_block_building_operations(
+fn handle_compact_block_building_operations(
         &mut self,
         instruction: &Instruction,
     ) -> Result<(), CompilerError> {
@@ -681,7 +697,7 @@ impl Compiler {
         Ok(())
     }
 
-    fn handle_taproot_operations(
+    fn handle_taproot_conversions(
         &mut self,
         instruction: &Instruction,
     ) -> Result<(), CompilerError> {
@@ -712,6 +728,36 @@ impl Compiler {
                 });
             }
             _ => unreachable!("Unsupported taproot helper"),
+        }
+        Ok(())
+    }
+
+    fn handle_taproot_tree_operations(
+        &mut self,
+        instruction: &Instruction,
+    ) -> Result<(), CompilerError> {
+        match &instruction.operation {
+            Operation::BeginTaprootTree => {
+                self.append_variable(TaprootTreeBuilder { leaves: Vec::new() });
+            }
+            Operation::AddTapLeaf => {
+                let script = self.get_input::<Vec<u8>>(&instruction.inputs, 1)?.clone();
+                let version = *self.get_input::<u8>(&instruction.inputs, 2)?;
+                let builder = self.get_input_mut::<TaprootTreeBuilder>(&instruction.inputs, 0)?;
+                builder.leaves.push(TaprootTreeLeaf { script, version });
+            }
+            Operation::EndTaprootTree => {
+                let builder = self.get_input::<TaprootTreeBuilder>(&instruction.inputs, 0)?;
+                if builder.leaves.is_empty() {
+                    return Err(CompilerError::MiscError(
+                        "cannot finalize taproot tree without leaves".to_string(),
+                    ));
+                }
+                self.append_variable(TaprootTree {
+                    leaves: builder.leaves.clone(),
+                });
+            }
+            _ => unreachable!("Unsupported taproot tree operation"),
         }
         Ok(())
     }
@@ -1334,6 +1380,9 @@ impl Compiler {
             Operation::LoadNonce(nonce) => self.handle_load_operation(*nonce),
             Operation::LoadTaprootTxo { txo } => {
                 self.handle_load_operation(txo.clone());
+            }
+            Operation::LoadTaprootLeafVersion(version) => {
+                self.handle_load_operation(*version);
             }
             _ => unreachable!("Non-load operation passed to handle_load_operations"),
         }
