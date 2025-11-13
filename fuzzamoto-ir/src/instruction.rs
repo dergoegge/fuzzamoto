@@ -62,7 +62,13 @@ impl Instruction {
             | Operation::SendTxNoWit
             | Operation::SendTx
             | Operation::AddAddrV2
-            | Operation::LoadBytes(_) => true,
+            | Operation::LoadBytes(_)
+            | Operation::LoadTaprootTxo { .. }
+            | Operation::LoadTaprootLeafVersion(_)
+            | Operation::BuildPayToTaproot
+            | Operation::TaprootTxoToSpendInfo
+            | Operation::TaprootTxoToKeypair
+            | Operation::TaprootTxoToTxo => true,
             _ => false,
         }
     }
@@ -90,6 +96,7 @@ impl Instruction {
             | Operation::BuildPayToPubKey
             | Operation::BuildPayToPubKeyHash
             | Operation::BuildPayToWitnessPubKeyHash
+            | Operation::BuildPayToTaproot
             | Operation::AddTxToFilter
             | Operation::AddTxoToFilter
             | Operation::BuildFilterAddFromTx
@@ -97,6 +104,7 @@ impl Instruction {
             | Operation::LoadPrivateKey(_)
             | Operation::LoadSigHashFlags(_)
             | Operation::LoadTxo { .. }
+            | Operation::LoadTaprootTxo { .. }
             | Operation::LoadHeader { .. }
             | Operation::LoadAmount(..)
             | Operation::LoadTxVersion(..)
@@ -107,6 +115,7 @@ impl Instruction {
             | Operation::LoadNonce(..)
             | Operation::LoadFilterLoad { .. }
             | Operation::LoadFilterAdd { .. }
+            | Operation::LoadTaprootLeafVersion(_)
             | Operation::AddWitness
             | Operation::SendTx
             | Operation::SendTxNoWit
@@ -140,6 +149,10 @@ impl Instruction {
             | Operation::SendFilterAdd
             | Operation::SendFilterClear
             | Operation::SendCompactBlock
+            | Operation::TaprootTxoToSpendInfo
+            | Operation::TaprootTxoToKeypair
+            | Operation::TaprootTxoToTxo
+            | Operation::AddTapLeaf
             | Operation::TakeTxo => true,
 
             Operation::Nop { .. }
@@ -166,6 +179,7 @@ impl Instruction {
             | Operation::EndBuildCoinbaseTx
             | Operation::BeginBuildCoinbaseTxOutputs
             | Operation::EndBuildCoinbaseTxOutputs => false,
+            Operation::BeginTaprootTree | Operation::EndTaprootTree => false,
         }
     }
 
@@ -187,6 +201,7 @@ impl Instruction {
                 Operation::BeginBuildCoinbaseTxOutputs => {
                     Some(InstructionContext::BuildCoinbaseTxOutputs)
                 }
+                Operation::BeginTaprootTree => Some(InstructionContext::TaprootTree),
                 _ => unimplemented!("Every block begin enters a context"),
             };
         }
@@ -219,4 +234,5 @@ pub enum InstructionContext {
     BuildFilter,
     BuildCoinbaseTx,
     BuildCoinbaseTxOutputs,
+    TaprootTree,
 }
