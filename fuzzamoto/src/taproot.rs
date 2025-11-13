@@ -5,20 +5,20 @@ pub struct TaprootContext {
     pub txos: Vec<TaprootTxo>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Hash)]
 pub struct TaprootTxo {
     pub outpoint: ([u8; 32], u32),
     pub value: u64,
     pub spend_info: TaprootSpendInfo,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Hash)]
 pub struct TaprootKeypair {
     pub secret_key: [u8; 32],
     pub public_key: [u8; 32],
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Hash)]
 pub struct TaprootSpendInfo {
     pub keypair: TaprootKeypair,
     pub merkle_root: Option<[u8; 32]>,
@@ -28,7 +28,7 @@ pub struct TaprootSpendInfo {
     pub leaves: Vec<TaprootLeaf>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Hash)]
 pub struct TaprootLeaf {
     pub version: u8,
     pub script: Vec<u8>,

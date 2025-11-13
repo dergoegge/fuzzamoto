@@ -7,7 +7,7 @@ use bitcoin::{
     consensus::Encodable,
     ecdsa,
     hashes::{Hash, serde_macros::serde_details::SerdeHash, sha256},
-    key::Secp256k1,
+    key::{Secp256k1, TapTweak},
     opcodes::{OP_0, OP_TRUE, all::OP_RETURN},
     p2p::{
         message_blockdata::Inventory,
@@ -15,12 +15,16 @@ use bitcoin::{
         message_filter::{GetCFCheckpt, GetCFHeaders, GetCFilters},
     },
     script::PushBytesBuf,
-    secp256k1::{self, SecretKey},
-    sighash::SighashCache,
+    secp256k1::{self, Keypair, SecretKey},
+    sighash::{Prevouts, SighashCache, TapSighashType},
+    taproot::TapNodeHash,
     transaction,
 };
 
-use crate::{Instruction, Operation, Program, bloom::filter_insert, generators::block::Header};
+use crate::{
+    Instruction, Operation, Program, TaprootSpendInfo, TaprootTxo, bloom::filter_insert,
+    generators::block::Header,
+};
 
 /// `Compiler` is responsible for compiling IR into a sequence of low-level actions to be performed
 /// on a node (i.e. mapping `fuzzamoto_ir::Program` -> `CompiledProgram`).
@@ -73,8 +77,20 @@ struct Scripts {
     script_sig: Vec<u8>,
     witness: Witness,
 
-    // op & vars
-    requires_signing: Option<(Operation, Vec<usize>)>,
+    requires_signing: Option<SigningRequest>,
+}
+
+#[derive(Debug, Clone)]
+enum SigningRequest {
+    Legacy {
+        operation: Operation,
+        private_key_var: usize,
+        sighash_var: usize,
+    },
+    Taproot {
+        spend_info_var: Option<usize>,
+        source_taproot_txo_var: Option<usize>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -168,9 +184,23 @@ impl Compiler {
                 | Operation::LoadSigHashFlags(..)
                 | Operation::LoadHeader { .. }
                 | Operation::LoadTxo { .. }
+                | Operation::LoadTaprootTxo { .. }
                 | Operation::LoadFilterLoad { .. }
                 | Operation::LoadFilterAdd { .. } => {
                     self.handle_load_operations(&instruction)?;
+                }
+                Operation::TaprootTxoToSpendInfo
+                | Operation::TaprootTxoToKeypair
+                | Operation::TaprootTxoToTxo => {
+                    self.handle_taproot_operations(&instruction)?;
+                }
+                Operation::BeginTaprootTree
+                | Operation::AddTapLeaf
+                | Operation::EndTaprootTree
+                | Operation::LoadTaprootLeafVersion(_) => {
+                    return Err(CompilerError::MiscError(
+                        "Taproot tree operations are not supported yet".to_string(),
+                    ));
                 }
 
                 Operation::BeginBlockTransactions
@@ -205,7 +235,8 @@ impl Compiler {
                 | Operation::BuildOpReturnScripts
                 | Operation::BuildPayToPubKey
                 | Operation::BuildPayToPubKeyHash
-                | Operation::BuildPayToWitnessPubKeyHash => {
+                | Operation::BuildPayToWitnessPubKeyHash
+                | Operation::BuildPayToTaproot => {
                     self.handle_script_building_operations(&instruction)?;
                 }
 
@@ -424,6 +455,41 @@ impl Compiler {
         Ok(())
     }
 
+    fn handle_taproot_operations(
+        &mut self,
+        instruction: &Instruction,
+    ) -> Result<(), CompilerError> {
+        match &instruction.operation {
+            Operation::TaprootTxoToSpendInfo => {
+                let taproot_txo = self.get_input::<TaprootTxo>(&instruction.inputs, 0)?;
+                self.append_variable(taproot_txo.spend_info.clone());
+            }
+            Operation::TaprootTxoToKeypair => {
+                let taproot_txo = self.get_input::<TaprootTxo>(&instruction.inputs, 0)?;
+                self.append_variable(taproot_txo.spend_info.keypair.clone());
+            }
+            Operation::TaprootTxoToTxo => {
+                let taproot_txo = self.get_input::<TaprootTxo>(&instruction.inputs, 0)?;
+                let source_var = instruction.inputs.first().copied();
+                self.append_variable(Txo {
+                    prev_out: taproot_txo.outpoint,
+                    scripts: Scripts {
+                        script_pubkey: taproot_txo.spend_info.script_pubkey.clone(),
+                        script_sig: vec![],
+                        witness: Witness { stack: Vec::new() },
+                        requires_signing: Some(SigningRequest::Taproot {
+                            spend_info_var: None,
+                            source_taproot_txo_var: source_var,
+                        }),
+                    },
+                    value: taproot_txo.value,
+                });
+            }
+            _ => unreachable!("Unsupported taproot helper"),
+        }
+        Ok(())
+    }
+
     fn handle_script_building_operations(
         &mut self,
         instruction: &Instruction,
@@ -510,6 +576,20 @@ impl Compiler {
                     requires_signing: None,
                 });
             }
+            Operation::BuildPayToTaproot => {
+                let spend_info = self.get_input::<TaprootSpendInfo>(&instruction.inputs, 0)?;
+                let spend_info_var = instruction.inputs.first().copied();
+
+                self.append_variable(Scripts {
+                    script_pubkey: spend_info.script_pubkey.clone(),
+                    script_sig: vec![],
+                    witness: Witness { stack: Vec::new() },
+                    requires_signing: Some(SigningRequest::Taproot {
+                        spend_info_var,
+                        source_taproot_txo_var: None,
+                    }),
+                });
+            }
             Operation::BuildPayToPubKey
             | Operation::BuildPayToPubKeyHash
             | Operation::BuildPayToWitnessPubKeyHash => {
@@ -544,10 +624,11 @@ impl Compiler {
                     witness: Witness {
                         stack: witness_stack,
                     },
-                    requires_signing: Some((
-                        instruction.operation.clone(),
-                        vec![instruction.inputs[0], instruction.inputs[1]],
-                    )),
+                    requires_signing: Some(SigningRequest::Legacy {
+                        operation: instruction.operation.clone(),
+                        private_key_var: instruction.inputs[0],
+                        sighash_var: instruction.inputs[1],
+                    }),
                 });
             }
             _ => unreachable!(
@@ -996,6 +1077,9 @@ impl Compiler {
             Operation::LoadFilterAdd { data } => {
                 self.handle_load_operation(FilterAdd { data: data.clone() });
             }
+            Operation::LoadTaprootTxo { txo } => {
+                self.handle_load_operation(txo.clone());
+            }
             _ => unreachable!("Non-load operation passed to handle_load_operations"),
         }
         Ok(())
@@ -1245,56 +1329,119 @@ impl Compiler {
                 }),
         );
 
+        let mut prevouts = Vec::with_capacity(tx_inputs_var.inputs.len());
+        for tx_input in &tx_inputs_var.inputs {
+            let txo_var = self.get_variable::<Txo>(tx_input.txo_var).unwrap();
+            prevouts.push(TxOut {
+                value: Amount::from_sat(txo_var.value),
+                script_pubkey: Script::from_bytes(&txo_var.scripts.script_pubkey).into(),
+            });
+        }
+
         // Sign inputs
         for (idx, input) in tx_inputs_var.inputs.iter().enumerate() {
             let txo_var = self.get_variable::<Txo>(input.txo_var).unwrap();
-            if let Some((operation, input_indices)) = &txo_var.scripts.requires_signing {
-                let private_key = *self.get_variable::<[u8; 32]>(input_indices[0]).unwrap();
-                let sighash_flag = *self.get_variable::<u8>(input_indices[1]).unwrap();
-
+            if let Some(signing_request) = &txo_var.scripts.requires_signing {
                 let mut cache = SighashCache::new(&tx_var.tx);
 
-                match operation {
-                    Operation::BuildPayToPubKey | Operation::BuildPayToPubKeyHash => {
-                        if let Ok(hash) = cache.legacy_signature_hash(
-                            idx,
-                            Script::from_bytes(&txo_var.scripts.script_pubkey),
-                            sighash_flag as u32,
-                        ) {
-                            let signature = ecdsa::Signature {
-                                signature: self.secp_ctx.sign_ecdsa(
-                                    &secp256k1::Message::from_digest(*hash.as_byte_array()),
-                                    &SecretKey::from_slice(private_key.as_slice()).unwrap(),
-                                ),
-                                sighash_type: EcdsaSighashType::from_consensus(sighash_flag as u32),
-                            };
+                match signing_request {
+                    SigningRequest::Legacy {
+                        operation,
+                        private_key_var,
+                        sighash_var,
+                    } => {
+                        let private_key = *self.get_variable::<[u8; 32]>(*private_key_var).unwrap();
+                        let sighash_flag = *self.get_variable::<u8>(*sighash_var).unwrap();
 
-                            tx_var.tx.input[idx]
-                                .script_sig
-                                .push_slice(PushBytesBuf::try_from(signature.to_vec()).unwrap());
+                        match operation {
+                            Operation::BuildPayToPubKey | Operation::BuildPayToPubKeyHash => {
+                                if let Ok(hash) = cache.legacy_signature_hash(
+                                    idx,
+                                    Script::from_bytes(&txo_var.scripts.script_pubkey),
+                                    sighash_flag as u32,
+                                ) {
+                                    let signature = ecdsa::Signature {
+                                        signature: self.secp_ctx.sign_ecdsa(
+                                            &secp256k1::Message::from_digest(*hash.as_byte_array()),
+                                            &SecretKey::from_slice(private_key.as_slice()).unwrap(),
+                                        ),
+                                        sighash_type: EcdsaSighashType::from_consensus(
+                                            sighash_flag as u32,
+                                        ),
+                                    };
+
+                                    tx_var.tx.input[idx].script_sig.push_slice(
+                                        PushBytesBuf::try_from(signature.to_vec()).unwrap(),
+                                    );
+                                }
+                            }
+                            Operation::BuildPayToWitnessPubKeyHash => {
+                                let sighash_type =
+                                    EcdsaSighashType::from_consensus(sighash_flag as u32);
+                                if let Ok(hash) = cache.p2wpkh_signature_hash(
+                                    idx,
+                                    Script::from_bytes(&txo_var.scripts.script_pubkey),
+                                    Amount::from_sat(txo_var.value),
+                                    sighash_type,
+                                ) {
+                                    let signature = ecdsa::Signature {
+                                        signature: self.secp_ctx.sign_ecdsa(
+                                            &secp256k1::Message::from_digest(*hash.as_byte_array()),
+                                            &SecretKey::from_slice(private_key.as_slice()).unwrap(),
+                                        ),
+                                        sighash_type,
+                                    };
+
+                                    tx_var.tx.input[idx].witness.push(signature.to_vec());
+                                }
+                            }
+                            _ => {}
                         }
                     }
-                    Operation::BuildPayToWitnessPubKeyHash => {
-                        let sighash_type = EcdsaSighashType::from_consensus(sighash_flag as u32);
-                        if let Ok(hash) = cache.p2wpkh_signature_hash(
-                            idx,
-                            Script::from_bytes(&txo_var.scripts.script_pubkey),
-                            Amount::from_sat(txo_var.value),
-                            sighash_type,
-                        ) {
-                            let signature = ecdsa::Signature {
-                                signature: self.secp_ctx.sign_ecdsa(
-                                    &secp256k1::Message::from_digest(*hash.as_byte_array()),
-                                    &SecretKey::from_slice(private_key.as_slice()).unwrap(),
-                                ),
-                                sighash_type,
-                            };
+                    SigningRequest::Taproot {
+                        spend_info_var,
+                        source_taproot_txo_var,
+                    } => {
+                        let spend_info = if let Some(var) = spend_info_var {
+                            self.get_variable::<TaprootSpendInfo>(*var).unwrap().clone()
+                        } else if let Some(var) = source_taproot_txo_var {
+                            self.get_variable::<TaprootTxo>(*var)
+                                .unwrap()
+                                .spend_info
+                                .clone()
+                        } else {
+                            return Err(CompilerError::MiscError(
+                                "taproot signing missing spend info".to_string(),
+                            ));
+                        };
 
-                            tx_var.tx.input[idx].witness.push(signature.to_vec());
-                        }
+                        let merkle_root = spend_info.merkle_root.map(TapNodeHash::from_byte_array);
+                        let secret_key =
+                            SecretKey::from_slice(spend_info.keypair.secret_key.as_slice())
+                                .unwrap();
+                        let keypair = Keypair::from_secret_key(&self.secp_ctx, &secret_key);
+                        let tweaked_keypair =
+                            keypair.tap_tweak(&self.secp_ctx, merkle_root).to_keypair();
+
+                        let prevouts_ref = Prevouts::All(&prevouts);
+                        let sighash = cache
+                            .taproot_key_spend_signature_hash(
+                                idx,
+                                &prevouts_ref,
+                                TapSighashType::Default,
+                            )
+                            .map_err(|e| {
+                                CompilerError::MiscError(format!("taproot sighash failed: {e:?}"))
+                            })?;
+                        let msg = secp256k1::Message::from_digest(*sighash.as_byte_array());
+                        let signature = self
+                            .secp_ctx
+                            .sign_schnorr_no_aux_rand(&msg, &tweaked_keypair);
+
+                        tx_var.tx.input[idx]
+                            .witness
+                            .push(signature.as_ref().to_vec());
                     }
-
-                    _ => {}
                 }
             }
         }
