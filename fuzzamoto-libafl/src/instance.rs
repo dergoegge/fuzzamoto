@@ -6,8 +6,8 @@ use fuzzamoto_ir::{
     CompactFilterQueryGenerator, GetDataGenerator, HeaderGenerator, InputMutator,
     InventoryGenerator, LargeTxGenerator, LongChainGenerator, OneParentOneChildGenerator,
     OperationMutator, Program, SendBlockGenerator, SendMessageGenerator, SingleTxGenerator,
-    TxoGenerator, WitnessGenerator, cutting::CuttingMinimizer, instr_block::InstrBlockMinimizer,
-    nopping::NoppingMinimizer,
+    TaprootKeyPathGenerator, TxoGenerator, WitnessGenerator, cutting::CuttingMinimizer,
+    instr_block::InstrBlockMinimizer, nopping::NoppingMinimizer,
 };
 
 use libafl::{
@@ -296,6 +296,13 @@ where
                 20.0,
                 IrGenerator::new(
                     TxoGenerator::new(full_program_context.txos.clone()),
+                    rng.clone()
+                )
+            ),
+            (
+                20.0,
+                IrGenerator::new(
+                    TaprootKeyPathGenerator::new(full_program_context.taproot.txos.clone()),
                     rng.clone()
                 )
             ),
