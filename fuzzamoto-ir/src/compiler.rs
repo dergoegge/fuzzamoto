@@ -113,6 +113,18 @@ struct TaprootLeafPlan {
     version: LeafVersion,
 }
 
+fn build_control_block(spend_info: &TaprootSpendInfo, leaf: &TaprootLeaf) -> Vec<u8> {
+    let mut control =
+        Vec::with_capacity(1 + spend_info.keypair.public_key.len() + 32 * leaf.merkle_branch.len());
+    let parity = spend_info.output_key_parity & 1;
+    control.push(leaf.version | parity);
+    control.extend_from_slice(&spend_info.keypair.public_key);
+    for hash in &leaf.merkle_branch {
+        control.extend_from_slice(hash);
+    }
+    control
+}
+
 #[derive(Clone, Debug)]
 struct Txo {
     prev_out: ([u8; 32], u32),
@@ -1594,10 +1606,20 @@ impl Compiler {
                             ));
                         };
 
-                        if leaf_var.is_some() {
-                            return Err(CompilerError::MiscError(
-                                "Taproot script-path signing is not supported yet".to_string(),
-                            ));
+                        if let Some(leaf_idx) = leaf_var {
+                            let leaf =
+                                self.get_variable::<TaprootLeaf>(*leaf_idx).map_err(|_| {
+                                    CompilerError::MiscError(
+                                        "taproot leaf variable missing for script-path spend"
+                                            .to_string(),
+                                    )
+                                })?;
+
+                            tx_var.tx.input[idx].witness.push(leaf.script.clone());
+                            tx_var.tx.input[idx]
+                                .witness
+                                .push(build_control_block(&spend_info, leaf));
+                            continue;
                         }
 
                         let merkle_root = spend_info.merkle_root.map(TapNodeHash::from_byte_array);
