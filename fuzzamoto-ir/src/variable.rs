@@ -55,6 +55,7 @@ pub enum Variable {
     TaprootTxo,
     TaprootSpendInfo,
     TaprootKeypair,
+    TaprootLeaf,
     TaprootLeafVersion,
     MutTaprootTree,
 }

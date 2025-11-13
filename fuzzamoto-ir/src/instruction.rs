@@ -64,7 +64,10 @@ impl Instruction {
             | Operation::BuildPayToTaproot
             | Operation::TaprootTxoToSpendInfo
             | Operation::TaprootTxoToKeypair
-            | Operation::TaprootTxoToTxo => true,
+            | Operation::TaprootTxoToTxo
+            | Operation::TaprootSpendInfoSelectLeaf { .. }
+            | Operation::TaprootScriptsUseLeaf
+            | Operation::TaprootTxoUseLeaf => true,
             _ => false,
         }
     }
@@ -140,6 +143,9 @@ impl Instruction {
             | Operation::TaprootTxoToSpendInfo
             | Operation::TaprootTxoToKeypair
             | Operation::TaprootTxoToTxo
+            | Operation::TaprootSpendInfoSelectLeaf { .. }
+            | Operation::TaprootScriptsUseLeaf
+            | Operation::TaprootTxoUseLeaf
             | Operation::AddTapLeaf
             | Operation::TakeTxo => true,
 
