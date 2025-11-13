@@ -1,7 +1,7 @@
 use rand::{Rng, RngCore};
 
 use crate::{
-    Operation, ProgramBuilder, TaprootTxo,
+    builder::IndexedVariable, Operation, ProgramBuilder, TaprootTxo,
     generators::{Generator, GeneratorError, GeneratorResult},
 };
 
@@ -47,6 +47,7 @@ impl<R: RngCore> Generator<R> for TaprootKeyPathGenerator {
         );
         let txo_var =
             builder.force_append_expect_output(vec![taproot_var.index], Operation::TaprootTxoToTxo);
+        let txo_var = maybe_attach_annex(builder, rng, txo_var);
 
         let tx_version_var =
             builder.force_append_expect_output(vec![], Operation::LoadTxVersion(2));
@@ -125,6 +126,7 @@ impl<R: RngCore> Generator<R> for TaprootScriptPathGenerator {
             vec![txo_var.index, leaf_var.index],
             Operation::TaprootTxoUseLeaf,
         );
+        let txo_with_leaf_var = maybe_attach_annex(builder, rng, txo_with_leaf_var);
 
         let tx_version_var =
             builder.force_append_expect_output(vec![], Operation::LoadTxVersion(2));
@@ -179,4 +181,35 @@ impl<R: RngCore> Generator<R> for TaprootScriptPathGenerator {
     fn name(&self) -> &'static str {
         "TaprootScriptPathGenerator"
     }
+}
+
+fn maybe_attach_annex<R: RngCore>(
+    builder: &mut ProgramBuilder,
+    rng: &mut R,
+    txo_var: IndexedVariable,
+) -> IndexedVariable {
+    if !rng.gen_bool(0.5) {
+        return txo_var;
+    }
+
+    let annex_var = builder.force_append_expect_output(
+        vec![],
+        Operation::LoadTaprootAnnex {
+            annex: random_annex(rng),
+        },
+    );
+    builder.force_append_expect_output(
+        vec![txo_var.index, annex_var.index],
+        Operation::TaprootTxoUseAnnex,
+    )
+}
+
+fn random_annex<R: RngCore>(rng: &mut R) -> Vec<u8> {
+    let extra_len = rng.gen_range(0..=64);
+    let mut annex = Vec::with_capacity(1 + extra_len);
+    annex.push(0x50);
+    for _ in 0..extra_len {
+        annex.push(rng.r#gen());
+    }
+    annex
 }

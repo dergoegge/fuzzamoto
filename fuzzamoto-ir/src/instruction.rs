@@ -60,6 +60,7 @@ impl Instruction {
             | Operation::SendTx
             | Operation::LoadBytes(_)
             | Operation::LoadTaprootTxo { .. }
+            | Operation::LoadTaprootAnnex { .. }
             | Operation::LoadTaprootLeafVersion(_)
             | Operation::BuildPayToTaproot
             | Operation::TaprootTxoToSpendInfo
@@ -67,7 +68,9 @@ impl Instruction {
             | Operation::TaprootTxoToTxo
             | Operation::TaprootSpendInfoSelectLeaf { .. }
             | Operation::TaprootScriptsUseLeaf
-            | Operation::TaprootTxoUseLeaf => true,
+            | Operation::TaprootTxoUseLeaf
+            | Operation::TaprootScriptsUseAnnex
+            | Operation::TaprootTxoUseAnnex => true,
             _ => false,
         }
     }
@@ -103,6 +106,7 @@ impl Instruction {
             | Operation::LoadSigHashFlags(_)
             | Operation::LoadTxo { .. }
             | Operation::LoadTaprootTxo { .. }
+            | Operation::LoadTaprootAnnex { .. }
             | Operation::LoadHeader { .. }
             | Operation::LoadAmount(..)
             | Operation::LoadTxVersion(..)
@@ -146,6 +150,8 @@ impl Instruction {
             | Operation::TaprootSpendInfoSelectLeaf { .. }
             | Operation::TaprootScriptsUseLeaf
             | Operation::TaprootTxoUseLeaf
+            | Operation::TaprootScriptsUseAnnex
+            | Operation::TaprootTxoUseAnnex
             | Operation::AddTapLeaf
             | Operation::TakeTxo => true,
 

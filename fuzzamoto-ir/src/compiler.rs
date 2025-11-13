@@ -94,6 +94,7 @@ enum SigningRequest {
         spend_info_var: Option<usize>,
         source_taproot_txo_var: Option<usize>,
         leaf_var: Option<usize>,
+        annex_var: Option<usize>,
     },
 }
 
@@ -113,11 +114,19 @@ struct TaprootLeafPlan {
     version: LeafVersion,
 }
 
-fn build_control_block(spend_info: &TaprootSpendInfo, leaf: &TaprootLeaf) -> Vec<u8> {
+fn build_control_block(
+    spend_info: &TaprootSpendInfo,
+    leaf: &TaprootLeaf,
+    annex_present: bool,
+) -> Vec<u8> {
     let mut control =
         Vec::with_capacity(1 + spend_info.keypair.public_key.len() + 32 * leaf.merkle_branch.len());
     let parity = spend_info.output_key_parity & 1;
-    control.push(leaf.version | parity);
+    let mut first_byte = leaf.version | parity;
+    if annex_present {
+        first_byte |= 0b10;
+    }
+    control.push(first_byte);
     control.extend_from_slice(&spend_info.keypair.public_key);
     for hash in &leaf.merkle_branch {
         control.extend_from_slice(hash);
@@ -212,6 +221,7 @@ impl Compiler {
                 | Operation::LoadHeader { .. }
                 | Operation::LoadTxo { .. }
                 | Operation::LoadTaprootTxo { .. }
+                | Operation::LoadTaprootAnnex { .. }
                 | Operation::LoadFilterLoad { .. }
                 | Operation::LoadFilterAdd { .. } => {
                     self.handle_load_operations(&instruction)?;
@@ -221,7 +231,9 @@ impl Compiler {
                 | Operation::TaprootTxoToTxo
                 | Operation::TaprootSpendInfoSelectLeaf { .. }
                 | Operation::TaprootScriptsUseLeaf
-                | Operation::TaprootTxoUseLeaf => {
+                | Operation::TaprootTxoUseLeaf
+                | Operation::TaprootScriptsUseAnnex
+                | Operation::TaprootTxoUseAnnex => {
                     self.handle_taproot_conversions(&instruction)?;
                 }
                 Operation::BeginTaprootTree | Operation::AddTapLeaf | Operation::EndTaprootTree => {
@@ -509,6 +521,7 @@ impl Compiler {
                             spend_info_var: None,
                             source_taproot_txo_var: source_var,
                             leaf_var: None,
+                            annex_var: None,
                         }),
                     },
                     value: taproot_txo.value,
@@ -535,7 +548,8 @@ impl Compiler {
 
                 match &mut scripts.requires_signing {
                     Some(SigningRequest::Taproot {
-                        leaf_var: target, ..
+                        leaf_var: target,
+                        ..
                     }) => {
                         *target = Some(leaf_var);
                     }
@@ -559,13 +573,64 @@ impl Compiler {
 
                 match &mut txo.scripts.requires_signing {
                     Some(SigningRequest::Taproot {
-                        leaf_var: target, ..
+                        leaf_var: target,
+                        ..
                     }) => {
                         *target = Some(leaf_var);
                     }
                     _ => {
                         return Err(CompilerError::MiscError(
                             "TaprootTxoUseLeaf requires a taproot script".to_string(),
+                        ));
+                    }
+                }
+
+                self.append_variable(txo);
+            }
+            Operation::TaprootScriptsUseAnnex => {
+                let mut scripts = self.get_input::<Scripts>(&instruction.inputs, 0)?.clone();
+                let annex_var = instruction
+                    .inputs
+                    .get(1)
+                    .copied()
+                    .ok_or(CompilerError::IncorrectNumberOfInputs)?;
+                self.get_input::<Vec<u8>>(&instruction.inputs, 1)?;
+
+                match &mut scripts.requires_signing {
+                    Some(SigningRequest::Taproot {
+                        annex_var: target,
+                        ..
+                    }) => {
+                        *target = Some(annex_var);
+                    }
+                    _ => {
+                        return Err(CompilerError::MiscError(
+                            "TaprootScriptsUseAnnex requires a taproot script".to_string(),
+                        ));
+                    }
+                }
+
+                self.append_variable(scripts);
+            }
+            Operation::TaprootTxoUseAnnex => {
+                let mut txo = self.get_input::<Txo>(&instruction.inputs, 0)?.clone();
+                let annex_var = instruction
+                    .inputs
+                    .get(1)
+                    .copied()
+                    .ok_or(CompilerError::IncorrectNumberOfInputs)?;
+                self.get_input::<Vec<u8>>(&instruction.inputs, 1)?;
+
+                match &mut txo.scripts.requires_signing {
+                    Some(SigningRequest::Taproot {
+                        annex_var: target,
+                        ..
+                    }) => {
+                        *target = Some(annex_var);
+                    }
+                    _ => {
+                        return Err(CompilerError::MiscError(
+                            "TaprootTxoUseAnnex requires a taproot script".to_string(),
                         ));
                     }
                 }
@@ -774,6 +839,7 @@ impl Compiler {
                         spend_info_var,
                         source_taproot_txo_var: None,
                         leaf_var: None,
+                        annex_var: None,
                     }),
                 });
             }
@@ -1267,6 +1333,9 @@ impl Compiler {
             Operation::LoadTaprootTxo { txo } => {
                 self.handle_load_operation(txo.clone());
             }
+            Operation::LoadTaprootAnnex { annex } => {
+                self.handle_load_operation(annex.clone());
+            }
             Operation::LoadTaprootLeafVersion(version) => {
                 self.handle_load_operation(*version);
             }
@@ -1592,6 +1661,7 @@ impl Compiler {
                         spend_info_var,
                         source_taproot_txo_var,
                         leaf_var,
+                        annex_var,
                     } => {
                         let spend_info = if let Some(var) = spend_info_var {
                             self.get_variable::<TaprootSpendInfo>(*var).unwrap().clone()
@@ -1604,6 +1674,23 @@ impl Compiler {
                             return Err(CompilerError::MiscError(
                                 "taproot signing missing spend info".to_string(),
                             ));
+                        };
+
+                        let annex_bytes = if let Some(var) = annex_var {
+                            let annex =
+                                self.get_variable::<Vec<u8>>(*var).map_err(|_| {
+                                    CompilerError::MiscError(
+                                        "taproot annex variable missing".to_string(),
+                                    )
+                                })?;
+                            if annex.is_empty() || annex[0] != 0x50 {
+                                return Err(CompilerError::MiscError(
+                                    "taproot annex must start with 0x50".to_string(),
+                                ));
+                            }
+                            Some(annex.clone())
+                        } else {
+                            None
                         };
 
                         if let Some(leaf_idx) = leaf_var {
@@ -1644,13 +1731,18 @@ impl Compiler {
                             let msg = secp256k1::Message::from_digest(*sighash.as_byte_array());
                             let signature = self.secp_ctx.sign_schnorr_no_aux_rand(&msg, &keypair);
 
+                            if let Some(annex) = &annex_bytes {
+                                tx_var.tx.input[idx].witness.push(annex.clone());
+                            }
                             tx_var.tx.input[idx]
                                 .witness
                                 .push(signature.as_ref().to_vec());
                             tx_var.tx.input[idx].witness.push(leaf.script.clone());
-                            tx_var.tx.input[idx]
-                                .witness
-                                .push(build_control_block(&spend_info, leaf));
+                            tx_var.tx.input[idx].witness.push(build_control_block(
+                                &spend_info,
+                                leaf,
+                                annex_bytes.is_some(),
+                            ));
                             continue;
                         }
 
@@ -1677,6 +1769,9 @@ impl Compiler {
                             .secp_ctx
                             .sign_schnorr_no_aux_rand(&msg, &tweaked_keypair);
 
+                        if let Some(annex) = &annex_bytes {
+                            tx_var.tx.input[idx].witness.push(annex.clone());
+                        }
                         tx_var.tx.input[idx]
                             .witness
                             .push(signature.as_ref().to_vec());
@@ -1704,5 +1799,138 @@ impl Compiler {
         self.append_variable(tx_var);
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        Operation, Program, ProgramBuilder, ProgramContext, TaprootKeypair, TaprootSpendInfo,
+        TaprootTxo,
+    };
+    use bitcoin::{
+        consensus::Decodable,
+        opcodes::all::OP_PUSHNUM_1,
+        script::PushBytesBuf,
+        secp256k1::{Keypair, Parity, Secp256k1, SecretKey, XOnlyPublicKey},
+        ScriptBuf,
+        Transaction,
+    };
+
+    #[test]
+    fn compile_taproot_key_path_with_annex_places_annex_first() {
+        let annex = vec![0x50, 0xAA, 0xBB, 0xCC];
+        let taproot_txo = sample_taproot_txo();
+        let program = build_annex_program(taproot_txo, annex.clone());
+
+        let mut compiler = Compiler::new();
+        let compiled = compiler.compile(&program).expect("program compiles");
+        let tx_bytes = match compiled.actions.first() {
+            Some(CompiledAction::SendRawMessage(_, cmd, payload)) if cmd == "tx" => payload.clone(),
+            other => panic!("unexpected action {:?}", other),
+        };
+        let tx = Transaction::consensus_decode(&mut tx_bytes.as_slice()).unwrap();
+        assert_eq!(tx.input.len(), 1);
+        assert!(tx.input[0].witness.len() >= 2);
+        assert_eq!(tx.input[0].witness[0], annex);
+    }
+
+    fn build_annex_program(taproot_txo: TaprootTxo, annex: Vec<u8>) -> Program {
+        let mut builder = ProgramBuilder::new(ProgramContext {
+            num_nodes: 1,
+            num_connections: 1,
+            timestamp: 0,
+        });
+
+        let connection = builder.force_append_expect_output(vec![], Operation::LoadConnection(0));
+        let taproot_var =
+            builder.force_append_expect_output(vec![], Operation::LoadTaprootTxo { txo: taproot_txo });
+        let txo_var =
+            builder.force_append_expect_output(vec![taproot_var.index], Operation::TaprootTxoToTxo);
+        let annex_var = builder.force_append_expect_output(
+            vec![],
+            Operation::LoadTaprootAnnex { annex },
+        );
+        let txo_var = builder.force_append_expect_output(
+            vec![txo_var.index, annex_var.index],
+            Operation::TaprootTxoUseAnnex,
+        );
+        let tx_version = builder.force_append_expect_output(vec![], Operation::LoadTxVersion(2));
+        let lock_time = builder.force_append_expect_output(vec![], Operation::LoadLockTime(0));
+        let mut_tx = builder.force_append_expect_output(
+            vec![tx_version.index, lock_time.index],
+            Operation::BeginBuildTx,
+        );
+        let mut_inputs =
+            builder.force_append_expect_output(vec![], Operation::BeginBuildTxInputs);
+        let sequence =
+            builder.force_append_expect_output(vec![], Operation::LoadSequence(0xffff_fffe));
+        builder.force_append(
+            vec![mut_inputs.index, txo_var.index, sequence.index],
+            Operation::AddTxInput,
+        );
+        let const_inputs =
+            builder.force_append_expect_output(vec![mut_inputs.index], Operation::EndBuildTxInputs);
+
+        let mut_outputs = builder.force_append_expect_output(
+            vec![const_inputs.index],
+            Operation::BeginBuildTxOutputs,
+        );
+        let scripts =
+            builder.force_append_expect_output(vec![], Operation::BuildPayToAnchor);
+        let amount =
+            builder.force_append_expect_output(vec![], Operation::LoadAmount(1_000));
+        builder.force_append(
+            vec![mut_outputs.index, scripts.index, amount.index],
+            Operation::AddTxOutput,
+        );
+        let const_outputs = builder.force_append_expect_output(
+            vec![mut_outputs.index],
+            Operation::EndBuildTxOutputs,
+        );
+
+        let const_tx = builder.force_append_expect_output(
+            vec![mut_tx.index, const_inputs.index, const_outputs.index],
+            Operation::EndBuildTx,
+        );
+
+        builder.force_append(
+            vec![connection.index, const_tx.index],
+            Operation::SendTx,
+        );
+
+        builder.finalize().expect("valid program")
+    }
+
+    fn sample_taproot_txo() -> TaprootTxo {
+        let secp = Secp256k1::new();
+        let secret_key = SecretKey::from_slice(&[3u8; 32]).unwrap();
+        let keypair = Keypair::from_secret_key(&secp, &secret_key);
+        let (internal_key, parity) = XOnlyPublicKey::from_keypair(&keypair);
+        let push_bytes =
+            PushBytesBuf::try_from(internal_key.serialize().to_vec()).expect("push bytes");
+        let script_pubkey = ScriptBuf::builder()
+            .push_opcode(OP_PUSHNUM_1)
+            .push_slice(&push_bytes)
+            .into_bytes();
+        TaprootTxo {
+            outpoint: ([0x11; 32], 0),
+            value: 50_000,
+            spend_info: TaprootSpendInfo {
+                keypair: TaprootKeypair {
+                    secret_key: secret_key.secret_bytes(),
+                    public_key: internal_key.serialize(),
+                },
+                merkle_root: None,
+                output_key: internal_key.serialize(),
+                output_key_parity: match parity {
+                    Parity::Even => 0,
+                    Parity::Odd => 1,
+                },
+                script_pubkey,
+                leaves: Vec::new(),
+            },
+        }
     }
 }
