@@ -1,7 +1,8 @@
 use rand::{Rng, RngCore};
 
 use crate::{
-    builder::IndexedVariable, Operation, ProgramBuilder, TaprootTxo,
+    Operation, ProgramBuilder, TaprootTxo,
+    builder::IndexedVariable,
     generators::{Generator, GeneratorError, GeneratorResult},
 };
 

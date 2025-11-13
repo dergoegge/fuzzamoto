@@ -548,8 +548,7 @@ impl Compiler {
 
                 match &mut scripts.requires_signing {
                     Some(SigningRequest::Taproot {
-                        leaf_var: target,
-                        ..
+                        leaf_var: target, ..
                     }) => {
                         *target = Some(leaf_var);
                     }
@@ -573,8 +572,7 @@ impl Compiler {
 
                 match &mut txo.scripts.requires_signing {
                     Some(SigningRequest::Taproot {
-                        leaf_var: target,
-                        ..
+                        leaf_var: target, ..
                     }) => {
                         *target = Some(leaf_var);
                     }
@@ -598,8 +596,7 @@ impl Compiler {
 
                 match &mut scripts.requires_signing {
                     Some(SigningRequest::Taproot {
-                        annex_var: target,
-                        ..
+                        annex_var: target, ..
                     }) => {
                         *target = Some(annex_var);
                     }
@@ -623,8 +620,7 @@ impl Compiler {
 
                 match &mut txo.scripts.requires_signing {
                     Some(SigningRequest::Taproot {
-                        annex_var: target,
-                        ..
+                        annex_var: target, ..
                     }) => {
                         *target = Some(annex_var);
                     }
@@ -1677,12 +1673,11 @@ impl Compiler {
                         };
 
                         let annex_bytes = if let Some(var) = annex_var {
-                            let annex =
-                                self.get_variable::<Vec<u8>>(*var).map_err(|_| {
-                                    CompilerError::MiscError(
-                                        "taproot annex variable missing".to_string(),
-                                    )
-                                })?;
+                            let annex = self.get_variable::<Vec<u8>>(*var).map_err(|_| {
+                                CompilerError::MiscError(
+                                    "taproot annex variable missing".to_string(),
+                                )
+                            })?;
                             if annex.is_empty() || annex[0] != 0x50 {
                                 return Err(CompilerError::MiscError(
                                     "taproot annex must start with 0x50".to_string(),
@@ -1810,12 +1805,11 @@ mod tests {
         TaprootTxo,
     };
     use bitcoin::{
+        ScriptBuf, Transaction,
         consensus::Decodable,
         opcodes::all::OP_PUSHNUM_1,
         script::PushBytesBuf,
         secp256k1::{Keypair, Parity, Secp256k1, SecretKey, XOnlyPublicKey},
-        ScriptBuf,
-        Transaction,
     };
 
     #[test]
@@ -1844,14 +1838,12 @@ mod tests {
         });
 
         let connection = builder.force_append_expect_output(vec![], Operation::LoadConnection(0));
-        let taproot_var =
-            builder.force_append_expect_output(vec![], Operation::LoadTaprootTxo { txo: taproot_txo });
+        let taproot_var = builder
+            .force_append_expect_output(vec![], Operation::LoadTaprootTxo { txo: taproot_txo });
         let txo_var =
             builder.force_append_expect_output(vec![taproot_var.index], Operation::TaprootTxoToTxo);
-        let annex_var = builder.force_append_expect_output(
-            vec![],
-            Operation::LoadTaprootAnnex { annex },
-        );
+        let annex_var =
+            builder.force_append_expect_output(vec![], Operation::LoadTaprootAnnex { annex });
         let txo_var = builder.force_append_expect_output(
             vec![txo_var.index, annex_var.index],
             Operation::TaprootTxoUseAnnex,
@@ -1862,8 +1854,7 @@ mod tests {
             vec![tx_version.index, lock_time.index],
             Operation::BeginBuildTx,
         );
-        let mut_inputs =
-            builder.force_append_expect_output(vec![], Operation::BeginBuildTxInputs);
+        let mut_inputs = builder.force_append_expect_output(vec![], Operation::BeginBuildTxInputs);
         let sequence =
             builder.force_append_expect_output(vec![], Operation::LoadSequence(0xffff_fffe));
         builder.force_append(
@@ -1873,32 +1864,23 @@ mod tests {
         let const_inputs =
             builder.force_append_expect_output(vec![mut_inputs.index], Operation::EndBuildTxInputs);
 
-        let mut_outputs = builder.force_append_expect_output(
-            vec![const_inputs.index],
-            Operation::BeginBuildTxOutputs,
-        );
-        let scripts =
-            builder.force_append_expect_output(vec![], Operation::BuildPayToAnchor);
-        let amount =
-            builder.force_append_expect_output(vec![], Operation::LoadAmount(1_000));
+        let mut_outputs = builder
+            .force_append_expect_output(vec![const_inputs.index], Operation::BeginBuildTxOutputs);
+        let scripts = builder.force_append_expect_output(vec![], Operation::BuildPayToAnchor);
+        let amount = builder.force_append_expect_output(vec![], Operation::LoadAmount(1_000));
         builder.force_append(
             vec![mut_outputs.index, scripts.index, amount.index],
             Operation::AddTxOutput,
         );
-        let const_outputs = builder.force_append_expect_output(
-            vec![mut_outputs.index],
-            Operation::EndBuildTxOutputs,
-        );
+        let const_outputs = builder
+            .force_append_expect_output(vec![mut_outputs.index], Operation::EndBuildTxOutputs);
 
         let const_tx = builder.force_append_expect_output(
             vec![mut_tx.index, const_inputs.index, const_outputs.index],
             Operation::EndBuildTx,
         );
 
-        builder.force_append(
-            vec![connection.index, const_tx.index],
-            Operation::SendTx,
-        );
+        builder.force_append(vec![connection.index, const_tx.index], Operation::SendTx);
 
         builder.finalize().expect("valid program")
     }
