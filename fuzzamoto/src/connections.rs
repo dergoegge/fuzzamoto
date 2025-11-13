@@ -19,6 +19,9 @@ pub trait Transport {
 
     /// Get the local address of the transport
     fn local_addr(&self) -> Result<net::SocketAddr, String>;
+
+    /// Get the peer address of the transport
+    fn peer_addr(&self) -> Result<net::SocketAddr, String>;
 }
 
 pub struct V1Transport {
@@ -116,6 +119,12 @@ impl Transport for V1Transport {
             .local_addr()
             .map_err(|e| format!("Failed to get local address: {}", e))
     }
+
+    fn peer_addr(&self) -> Result<net::SocketAddr, String> {
+        self.socket
+            .peer_addr()
+            .map_err(|e| format!("Failed to get peer address: {}", e))
+    }
 }
 
 pub struct Connection<T: Transport> {
@@ -179,6 +188,14 @@ impl<T: Transport> Connection<T> {
 
     pub fn receive(&mut self) -> Result<(String, Vec<u8>), String> {
         self.transport.receive()
+    }
+
+    pub fn local_addr(&self) -> Result<net::SocketAddr, String> {
+        self.transport.local_addr()
+    }
+
+    pub fn peer_addr(&self) -> Result<net::SocketAddr, String> {
+        self.transport.peer_addr()
     }
 
     pub fn ping(&mut self) -> Result<(), String> {
