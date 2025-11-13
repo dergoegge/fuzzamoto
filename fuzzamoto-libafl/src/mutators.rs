@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use fuzzamoto_ir::Program;
 
 use libafl::{
-    Error,
+    Error, HasMetadata,
     corpus::{Corpus, CorpusId, NopCorpus},
     inputs::BytesInput,
     mutators::{HavocScheduledMutator, MutationResult, Mutator, havoc_mutations},
@@ -11,10 +11,20 @@ use libafl::{
     state::{HasCorpus, HasRand, StdState},
 };
 use libafl_bolts::{
-    HasLen, Named,
+    HasLen, Named, impl_serdeany,
     rands::{Rand, StdRand},
 };
 use rand::RngCore;
+
+use serde::{Deserialize, Serialize};
+/// Runtime metadata for fuzzamoto. This data is changed at runtime in response to the harness execution during fuzzing
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RuntimeMetadata {
+    // TODO: Add stuff..
+    data: fuzzamoto::RuntimeMetadata,
+}
+
+impl_serdeany!(RuntimeMetadata);
 
 use crate::input::IrInput;
 
@@ -44,15 +54,27 @@ where
 
 impl<S, M, R> Mutator<IrInput, S> for IrMutator<M, R>
 where
-    S: HasRand,
+    S: HasRand + HasMetadata,
     R: RngCore,
     M: fuzzamoto_ir::Mutator<R>,
 {
-    fn mutate(&mut self, _state: &mut S, input: &mut IrInput) -> Result<MutationResult, Error> {
-        Ok(match self.mutator.mutate(input.ir_mut(), &mut self.rng) {
-            Ok(_) => MutationResult::Mutated,
-            _ => MutationResult::Skipped,
-        })
+    fn mutate(&mut self, state: &mut S, input: &mut IrInput) -> Result<MutationResult, Error> {
+        if !state.has_metadata::<RuntimeMetadata>() {
+            state.add_metadata(RuntimeMetadata::default());
+        }
+        let rt_data = state
+            .metadata::<RuntimeMetadata>()
+            .expect("RuntimeMetadata should always exist");
+
+        Ok(
+            match self
+                .mutator
+                .mutate(input.ir_mut(), &mut self.rng, &rt_data.data)
+            {
+                Ok(_) => MutationResult::Mutated,
+                _ => MutationResult::Skipped,
+            },
+        )
     }
 
     #[inline]
@@ -165,11 +187,11 @@ where
 
 impl<S, G, R> Mutator<IrInput, S> for IrGenerator<G, R>
 where
-    S: HasRand,
+    S: HasRand + HasMetadata,
     R: RngCore,
     G: fuzzamoto_ir::Generator<R>,
 {
-    fn mutate(&mut self, _state: &mut S, input: &mut IrInput) -> Result<MutationResult, Error> {
+    fn mutate(&mut self, state: &mut S, input: &mut IrInput) -> Result<MutationResult, Error> {
         let Some(index) = input
             .ir()
             .get_random_instruction_index(&mut self.rng, self.generator.requested_context())
@@ -179,6 +201,12 @@ where
 
         let mut builder = fuzzamoto_ir::ProgramBuilder::new(input.ir().context.clone());
 
+        if !state.has_metadata::<RuntimeMetadata>() {
+            state.add_metadata(RuntimeMetadata::default());
+        }
+        let rt_data = state
+            .metadata::<RuntimeMetadata>()
+            .expect("RuntimeMetadata should always exist");
         builder
             .append_all(input.ir().instructions[..index].iter().cloned())
             .expect("Partial append should always succeed if full append succeeded");
@@ -187,7 +215,7 @@ where
 
         if self
             .generator
-            .generate(&mut builder, &mut self.rng)
+            .generate(&mut builder, &mut self.rng, &rt_data.data)
             .is_err()
         {
             return Ok(MutationResult::Skipped);

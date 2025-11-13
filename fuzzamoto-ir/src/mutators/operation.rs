@@ -22,7 +22,12 @@ pub struct OperationMutator<M> {
 }
 
 impl<R: RngCore, M: OperationByteMutator> Mutator<R> for OperationMutator<M> {
-    fn mutate(&mut self, program: &mut Program, rng: &mut R) -> MutatorResult {
+    fn mutate(
+        &mut self,
+        program: &mut Program,
+        rng: &mut R,
+        _rt_data: &fuzzamoto::RuntimeMetadata,
+    ) -> MutatorResult {
         let Some(candidate_instruction) = program
             .instructions
             .iter_mut()

@@ -31,7 +31,12 @@ impl TxoGenerator {
 }
 
 impl<R: RngCore> Generator<R> for TxoGenerator {
-    fn generate(&self, builder: &mut ProgramBuilder, rng: &mut R) -> GeneratorResult {
+    fn generate(
+        &self,
+        builder: &mut ProgramBuilder,
+        rng: &mut R,
+        _rt_data: &fuzzamoto::RuntimeMetadata,
+    ) -> GeneratorResult {
         if self.available_txos.is_empty() {
             return Err(GeneratorError::MissingVariables);
         }

@@ -138,6 +138,8 @@ pub fn generate_ir(
         ));
     }
 
+    let rt_data = fuzzamoto::RuntimeMetadata::default();
+
     for _ in 0..programs {
         let mut program = Program::unchecked_new(context.context.clone(), vec![]);
 
@@ -151,10 +153,11 @@ pub fn generate_ir(
 
             let variable_threshold = builder.variable_count();
 
-            if let Err(_) = generators
-                .choose(&mut rng)
-                .unwrap()
-                .generate(&mut builder, &mut rng)
+            if let Err(_) =
+                generators
+                    .choose(&mut rng)
+                    .unwrap()
+                    .generate(&mut builder, &mut rng, &rt_data)
             {
                 continue;
             }

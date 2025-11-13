@@ -85,7 +85,12 @@ fn populate_filter_from_txdata(
 }
 
 impl<R: RngCore> Generator<R> for BloomFilterLoadGenerator {
-    fn generate(&self, builder: &mut ProgramBuilder, rng: &mut R) -> GeneratorResult {
+    fn generate(
+        &self,
+        builder: &mut ProgramBuilder,
+        rng: &mut R,
+        _rt_data: &fuzzamoto::RuntimeMetadata,
+    ) -> GeneratorResult {
         let connection_var = builder.get_or_create_random_connection(rng);
 
         // Generate initial `LoadFilterLoad` operation
@@ -118,7 +123,12 @@ impl<R: RngCore> Generator<R> for BloomFilterLoadGenerator {
 pub struct BloomFilterAddGenerator;
 
 impl<R: RngCore> Generator<R> for BloomFilterAddGenerator {
-    fn generate(&self, builder: &mut ProgramBuilder, rng: &mut R) -> GeneratorResult {
+    fn generate(
+        &self,
+        builder: &mut ProgramBuilder,
+        rng: &mut R,
+        _rt_data: &fuzzamoto::RuntimeMetadata,
+    ) -> GeneratorResult {
         let connection_var = builder.get_or_create_random_connection(rng);
         let filter_loaded = builder
             .get_nearest_variable(Variable::ConstFilterLoad)
@@ -215,7 +225,12 @@ impl<R: RngCore> Generator<R> for BloomFilterAddGenerator {
 pub struct BloomFilterClearGenerator;
 
 impl<R: RngCore> Generator<R> for BloomFilterClearGenerator {
-    fn generate(&self, builder: &mut ProgramBuilder, rng: &mut R) -> GeneratorResult {
+    fn generate(
+        &self,
+        builder: &mut ProgramBuilder,
+        rng: &mut R,
+        _rt_data: &fuzzamoto::RuntimeMetadata,
+    ) -> GeneratorResult {
         let connection_var = builder.get_or_create_random_connection(rng);
         builder
             .append(Instruction {

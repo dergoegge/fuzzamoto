@@ -16,7 +16,12 @@ impl WitnessGenerator {
 }
 
 impl<R: RngCore> Generator<R> for WitnessGenerator {
-    fn generate(&self, builder: &mut ProgramBuilder, rng: &mut R) -> GeneratorResult {
+    fn generate(
+        &self,
+        builder: &mut ProgramBuilder,
+        rng: &mut R,
+        _rt_data: &fuzzamoto::RuntimeMetadata,
+    ) -> GeneratorResult {
         let Some(witness_var) = builder.get_nearest_variable(Variable::MutWitnessStack) else {
             return Err(GeneratorError::MissingVariables);
         };

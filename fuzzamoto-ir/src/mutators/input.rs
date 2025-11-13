@@ -10,7 +10,12 @@ use rand::{RngCore, seq::IteratorRandom};
 pub struct InputMutator;
 
 impl<R: RngCore> Mutator<R> for InputMutator {
-    fn mutate(&mut self, program: &mut Program, rng: &mut R) -> MutatorResult {
+    fn mutate(
+        &mut self,
+        program: &mut Program,
+        rng: &mut R,
+        _rt_data: &fuzzamoto::RuntimeMetadata,
+    ) -> MutatorResult {
         let Some(candidate_instruction) = program
             .instructions
             .iter()

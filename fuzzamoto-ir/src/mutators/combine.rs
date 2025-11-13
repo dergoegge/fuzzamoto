@@ -7,7 +7,12 @@ use rand::RngCore;
 pub struct CombineMutator;
 
 impl<R: RngCore> Mutator<R> for CombineMutator {
-    fn mutate(&mut self, _program: &mut Program, _rng: &mut R) -> MutatorResult {
+    fn mutate(
+        &mut self,
+        _program: &mut Program,
+        _rng: &mut R,
+        _rt_data: &fuzzamoto::RuntimeMetadata,
+    ) -> MutatorResult {
         Ok(())
     }
 

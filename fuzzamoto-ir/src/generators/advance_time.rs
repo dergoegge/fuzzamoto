@@ -29,7 +29,12 @@ impl Default for AdvanceTimeGenerator {
 }
 
 impl<R: RngCore> Generator<R> for AdvanceTimeGenerator {
-    fn generate(&self, builder: &mut ProgramBuilder, rng: &mut R) -> GeneratorResult {
+    fn generate(
+        &self,
+        builder: &mut ProgramBuilder,
+        rng: &mut R,
+        _rt_data: &fuzzamoto::RuntimeMetadata,
+    ) -> GeneratorResult {
         // Find the most recent time variable or load the timestamp from the context
         let time_var = match builder.get_nearest_variable(Variable::Time) {
             Some(v) => v,

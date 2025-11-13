@@ -19,7 +19,12 @@ pub enum MutatorError {
 pub type MutatorResult = Result<(), MutatorError>;
 
 pub trait Mutator<R: RngCore> {
-    fn mutate(&mut self, program: &mut Program, rng: &mut R) -> MutatorResult;
+    fn mutate(
+        &mut self,
+        program: &mut Program,
+        rng: &mut R,
+        rt_data: &fuzzamoto::RuntimeMetadata,
+    ) -> MutatorResult;
     fn name(&self) -> &'static str;
 }
 

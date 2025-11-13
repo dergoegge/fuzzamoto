@@ -31,7 +31,12 @@ pub enum GeneratorError {
 pub type GeneratorResult = Result<(), GeneratorError>;
 pub trait Generator<R: RngCore> {
     /// Generate additional instructions into the program being build by `builder`
-    fn generate(&self, builder: &mut ProgramBuilder, rng: &mut R) -> GeneratorResult;
+    fn generate(
+        &self,
+        builder: &mut ProgramBuilder,
+        rng: &mut R,
+        rt_data: &fuzzamoto::RuntimeMetadata,
+    ) -> GeneratorResult;
 
     /// Name of the generator
     fn name(&self) -> &'static str;
