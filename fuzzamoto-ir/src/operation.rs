@@ -799,7 +799,7 @@ impl Operation {
             Operation::TaprootTxoToTxo => vec![Variable::Txo],
             Operation::BeginTaprootTree => vec![],
             Operation::AddTapLeaf => vec![],
-            Operation::EndTaprootTree => vec![Variable::ConstTaprootTree],
+            Operation::EndTaprootTree => vec![Variable::TaprootSpendInfo],
             Operation::LoadTaprootLeafVersion(_) => vec![Variable::TaprootLeafVersion],
 
             Operation::AddTx => vec![],
@@ -952,7 +952,7 @@ impl Operation {
             Operation::TaprootTxoToSpendInfo => vec![Variable::TaprootTxo],
             Operation::TaprootTxoToKeypair => vec![Variable::TaprootTxo],
             Operation::TaprootTxoToTxo => vec![Variable::TaprootTxo],
-            Operation::EndTaprootTree => vec![Variable::MutTaprootTree],
+            Operation::EndTaprootTree => vec![Variable::MutTaprootTree, Variable::TaprootKeypair],
             Operation::AddTapLeaf => vec![
                 Variable::MutTaprootTree,
                 Variable::Bytes,
