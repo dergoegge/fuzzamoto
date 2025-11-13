@@ -8,22 +8,22 @@ use bitcoin::{
     ecdsa,
     hashes::{Hash, serde_macros::serde_details::SerdeHash, sha256},
     key::{Secp256k1, TapTweak},
-    opcodes::{OP_0, OP_TRUE, all::OP_RETURN},
+    opcodes::{OP_0, OP_TRUE, all::{OP_PUSHNUM_1, OP_RETURN}},
     p2p::{
         message_blockdata::Inventory,
         message_bloom::{BloomFlags, FilterAdd, FilterLoad},
         message_filter::{GetCFCheckpt, GetCFHeaders, GetCFilters},
     },
     script::PushBytesBuf,
-    secp256k1::{self, Keypair, SecretKey},
+    secp256k1::{self, Keypair, SecretKey, XOnlyPublicKey},
     sighash::{Prevouts, SighashCache, TapSighashType},
-    taproot::TapNodeHash,
+    taproot::{LeafVersion, TapNodeHash, TaprootBuilder as BitcoinTaprootBuilder},
     transaction,
 };
 
 use crate::{
-    Instruction, Operation, Program, TaprootSpendInfo, TaprootTxo, bloom::filter_insert,
-    generators::block::Header,
+    Instruction, Operation, Program, TaprootKeypair, TaprootLeaf, TaprootSpendInfo, TaprootTxo,
+    bloom::filter_insert, generators::block::Header,
 };
 
 /// `Compiler` is responsible for compiling IR into a sequence of low-level actions to be performed
@@ -100,20 +100,13 @@ struct Witness {
 
 #[derive(Clone, Debug)]
 struct TaprootTreeBuilder {
-    leaves: Vec<TaprootTreeLeaf>,
+    leaves: Vec<TaprootLeafPlan>,
 }
 
-#[allow(dead_code)]
 #[derive(Clone, Debug)]
-struct TaprootTree {
-    leaves: Vec<TaprootTreeLeaf>,
-}
-
-#[allow(dead_code)]
-#[derive(Clone, Debug)]
-struct TaprootTreeLeaf {
+struct TaprootLeafPlan {
     script: Vec<u8>,
-    version: u8,
+    version: LeafVersion,
 }
 
 #[derive(Clone, Debug)]
@@ -516,19 +509,86 @@ impl Compiler {
             }
             Operation::AddTapLeaf => {
                 let script = self.get_input::<Vec<u8>>(&instruction.inputs, 1)?.clone();
-                let version = *self.get_input::<u8>(&instruction.inputs, 2)?;
+                let version_byte = *self.get_input::<u8>(&instruction.inputs, 2)?;
+                let version = LeafVersion::from_consensus(version_byte).map_err(|e| {
+                    CompilerError::MiscError(format!("invalid taproot leaf version: {e:?}"))
+                })?;
                 let builder = self.get_input_mut::<TaprootTreeBuilder>(&instruction.inputs, 0)?;
-                builder.leaves.push(TaprootTreeLeaf { script, version });
+                builder.leaves.push(TaprootLeafPlan { script, version });
             }
             Operation::EndTaprootTree => {
                 let builder = self.get_input::<TaprootTreeBuilder>(&instruction.inputs, 0)?;
+                let keypair = self.get_input::<TaprootKeypair>(&instruction.inputs, 1)?;
                 if builder.leaves.is_empty() {
                     return Err(CompilerError::MiscError(
                         "cannot finalize taproot tree without leaves".to_string(),
                     ));
                 }
-                self.append_variable(TaprootTree {
-                    leaves: builder.leaves.clone(),
+                let internal_key = XOnlyPublicKey::from_slice(&keypair.public_key).map_err(
+                    |_| CompilerError::MiscError("invalid taproot internal key bytes".to_string()),
+                )?;
+
+                let mut taproot_builder = BitcoinTaprootBuilder::new();
+                for leaf in &builder.leaves {
+                    let script_buf = ScriptBuf::from(leaf.script.clone());
+                    taproot_builder = taproot_builder
+                        .add_leaf_with_ver(0, script_buf, leaf.version)
+                        .map_err(|e| {
+                            CompilerError::MiscError(format!("failed to add tapleaf: {e:?}"))
+                        })?;
+                }
+
+                let spend_info = taproot_builder
+                    .finalize(&self.secp_ctx, internal_key)
+                    .map_err(|e| {
+                        CompilerError::MiscError(format!("finalizing taproot tree failed: {e:?}"))
+                    })?;
+
+                let output_key_bytes = spend_info.output_key().to_x_only_public_key().serialize();
+                let push_bytes = PushBytesBuf::try_from(output_key_bytes.to_vec()).map_err(|_| {
+                    CompilerError::MiscError("failed to encode taproot key bytes".to_string())
+                })?;
+                let script_pubkey = ScriptBuf::builder()
+                    .push_opcode(OP_PUSHNUM_1)
+                    .push_slice(&push_bytes)
+                    .into_script();
+
+                let leaves = builder
+                    .leaves
+                    .iter()
+                    .map(|leaf| {
+                        let script_buf = ScriptBuf::from(leaf.script.clone());
+                        let control_block = spend_info
+                            .control_block(&(script_buf.clone(), leaf.version))
+                            .ok_or_else(|| {
+                                CompilerError::MiscError(
+                                    "missing control block for tapscript leaf".to_string(),
+                                )
+                            })?;
+                        let merkle_branch = control_block
+                            .merkle_branch
+                            .iter()
+                            .map(|hash| *hash.as_byte_array())
+                            .collect();
+                        Ok(TaprootLeaf {
+                            version: leaf.version.to_consensus(),
+                            script: leaf.script.clone(),
+                            merkle_branch,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, CompilerError>>()?;
+
+                let merkle_root = spend_info.merkle_root().map(|root| *root.as_byte_array());
+                self.append_variable(TaprootSpendInfo {
+                    keypair: keypair.clone(),
+                    merkle_root,
+                    output_key: output_key_bytes,
+                    output_key_parity: match spend_info.output_key_parity() {
+                        secp256k1::Parity::Even => 0,
+                        secp256k1::Parity::Odd => 1,
+                    },
+                    script_pubkey: script_pubkey.as_bytes().to_vec(),
+                    leaves,
                 });
             }
             _ => unreachable!("Unsupported taproot tree operation"),

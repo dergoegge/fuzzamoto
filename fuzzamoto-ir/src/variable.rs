@@ -57,5 +57,4 @@ pub enum Variable {
     TaprootKeypair,
     TaprootLeafVersion,
     MutTaprootTree,
-    ConstTaprootTree,
 }
