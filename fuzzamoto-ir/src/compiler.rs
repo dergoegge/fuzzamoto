@@ -7,7 +7,10 @@ use bitcoin::{
     ecdsa,
     hashes::{Hash, serde_macros::serde_details::SerdeHash, sha256},
     key::{Secp256k1, TapTweak},
-    opcodes::{OP_0, OP_TRUE, all::{OP_PUSHNUM_1, OP_RETURN}},
+    opcodes::{
+        OP_0, OP_TRUE,
+        all::{OP_PUSHNUM_1, OP_RETURN},
+    },
     p2p::{
         ServiceFlags,
         address::{AddrV2, AddrV2Message, Address},
@@ -102,6 +105,7 @@ enum SigningRequest {
     Taproot {
         spend_info_var: Option<usize>,
         source_taproot_txo_var: Option<usize>,
+        leaf_var: Option<usize>,
     },
 }
 
@@ -226,7 +230,10 @@ impl Compiler {
                 }
                 Operation::TaprootTxoToSpendInfo
                 | Operation::TaprootTxoToKeypair
-                | Operation::TaprootTxoToTxo => {
+                | Operation::TaprootTxoToTxo
+                | Operation::TaprootSpendInfoSelectLeaf { .. }
+                | Operation::TaprootScriptsUseLeaf
+                | Operation::TaprootTxoUseLeaf => {
                     self.handle_taproot_conversions(&instruction)?;
                 }
                 Operation::BeginTaprootTree | Operation::AddTapLeaf | Operation::EndTaprootTree => {
@@ -715,10 +722,69 @@ fn handle_compact_block_building_operations(
                         requires_signing: Some(SigningRequest::Taproot {
                             spend_info_var: None,
                             source_taproot_txo_var: source_var,
+                            leaf_var: None,
                         }),
                     },
                     value: taproot_txo.value,
                 });
+            }
+            Operation::TaprootSpendInfoSelectLeaf { index } => {
+                let spend_info = self.get_input::<TaprootSpendInfo>(&instruction.inputs, 0)?;
+                if spend_info.leaves.is_empty() {
+                    return Err(CompilerError::MiscError(
+                        "taproot spend info does not contain any leaves".to_string(),
+                    ));
+                }
+                let idx = index % spend_info.leaves.len();
+                self.append_variable(spend_info.leaves[idx].clone());
+            }
+            Operation::TaprootScriptsUseLeaf => {
+                let mut scripts = self.get_input::<Scripts>(&instruction.inputs, 0)?.clone();
+                let leaf_var = instruction
+                    .inputs
+                    .get(1)
+                    .copied()
+                    .ok_or(CompilerError::IncorrectNumberOfInputs)?;
+                self.get_input::<TaprootLeaf>(&instruction.inputs, 1)?;
+
+                match &mut scripts.requires_signing {
+                    Some(SigningRequest::Taproot {
+                        leaf_var: target, ..
+                    }) => {
+                        *target = Some(leaf_var);
+                    }
+                    _ => {
+                        return Err(CompilerError::MiscError(
+                            "TaprootScriptsUseLeaf requires a taproot script".to_string(),
+                        ));
+                    }
+                }
+
+                self.append_variable(scripts);
+            }
+            Operation::TaprootTxoUseLeaf => {
+                let mut txo = self.get_input::<Txo>(&instruction.inputs, 0)?.clone();
+                let leaf_var = instruction
+                    .inputs
+                    .get(1)
+                    .copied()
+                    .ok_or(CompilerError::IncorrectNumberOfInputs)?;
+                self.get_input::<TaprootLeaf>(&instruction.inputs, 1)?;
+
+                match &mut txo.scripts.requires_signing {
+                    Some(SigningRequest::Taproot {
+                        leaf_var: target, ..
+                    }) => {
+                        *target = Some(leaf_var);
+                    }
+                    _ => {
+                        return Err(CompilerError::MiscError(
+                            "TaprootTxoUseLeaf requires a taproot script".to_string(),
+                        ));
+                    }
+                }
+
+                self.append_variable(txo);
             }
             _ => unreachable!("Unsupported taproot helper"),
         }
@@ -750,9 +816,10 @@ fn handle_compact_block_building_operations(
                         "cannot finalize taproot tree without leaves".to_string(),
                     ));
                 }
-                let internal_key = XOnlyPublicKey::from_slice(&keypair.public_key).map_err(
-                    |_| CompilerError::MiscError("invalid taproot internal key bytes".to_string()),
-                )?;
+                let internal_key =
+                    XOnlyPublicKey::from_slice(&keypair.public_key).map_err(|_| {
+                        CompilerError::MiscError("invalid taproot internal key bytes".to_string())
+                    })?;
 
                 let mut taproot_builder = BitcoinTaprootBuilder::new();
                 for leaf in &builder.leaves {
@@ -771,9 +838,10 @@ fn handle_compact_block_building_operations(
                     })?;
 
                 let output_key_bytes = spend_info.output_key().to_x_only_public_key().serialize();
-                let push_bytes = PushBytesBuf::try_from(output_key_bytes.to_vec()).map_err(|_| {
-                    CompilerError::MiscError("failed to encode taproot key bytes".to_string())
-                })?;
+                let push_bytes =
+                    PushBytesBuf::try_from(output_key_bytes.to_vec()).map_err(|_| {
+                        CompilerError::MiscError("failed to encode taproot key bytes".to_string())
+                    })?;
                 let script_pubkey = ScriptBuf::builder()
                     .push_opcode(OP_PUSHNUM_1)
                     .push_slice(&push_bytes)
@@ -919,6 +987,7 @@ fn handle_compact_block_building_operations(
                     requires_signing: Some(SigningRequest::Taproot {
                         spend_info_var,
                         source_taproot_txo_var: None,
+                        leaf_var: None,
                     }),
                 });
             }
@@ -1765,6 +1834,7 @@ fn handle_compact_block_building_operations(
                     SigningRequest::Taproot {
                         spend_info_var,
                         source_taproot_txo_var,
+                        leaf_var,
                     } => {
                         let spend_info = if let Some(var) = spend_info_var {
                             self.get_variable::<TaprootSpendInfo>(*var).unwrap().clone()
@@ -1778,6 +1848,12 @@ fn handle_compact_block_building_operations(
                                 "taproot signing missing spend info".to_string(),
                             ));
                         };
+
+                        if leaf_var.is_some() {
+                            return Err(CompilerError::MiscError(
+                                "Taproot script-path signing is not supported yet".to_string(),
+                            ));
+                        }
 
                         let merkle_root = spend_info.merkle_root.map(TapNodeHash::from_byte_array);
                         let secret_key =

@@ -166,6 +166,11 @@ pub enum Operation {
     TaprootTxoToSpendInfo,
     TaprootTxoToKeypair,
     TaprootTxoToTxo,
+    TaprootSpendInfoSelectLeaf {
+        index: usize,
+    },
+    TaprootScriptsUseLeaf,
+    TaprootTxoUseLeaf,
     BeginTaprootTree,
     AddTapLeaf,
     EndTaprootTree,
@@ -378,6 +383,11 @@ impl fmt::Display for Operation {
             Operation::TaprootTxoToSpendInfo => write!(f, "TaprootTxoToSpendInfo"),
             Operation::TaprootTxoToKeypair => write!(f, "TaprootTxoToKeypair"),
             Operation::TaprootTxoToTxo => write!(f, "TaprootTxoToTxo"),
+            Operation::TaprootSpendInfoSelectLeaf { index } => {
+                write!(f, "TaprootSpendInfoSelectLeaf({})", index)
+            }
+            Operation::TaprootScriptsUseLeaf => write!(f, "TaprootScriptsUseLeaf"),
+            Operation::TaprootTxoUseLeaf => write!(f, "TaprootTxoUseLeaf"),
             Operation::BeginTaprootTree => write!(f, "BeginTaprootTree"),
             Operation::AddTapLeaf => write!(f, "AddTapLeaf"),
             Operation::EndTaprootTree => write!(f, "EndTaprootTree"),
@@ -524,6 +534,9 @@ impl Operation {
             | Operation::TaprootTxoToSpendInfo
             | Operation::TaprootTxoToKeypair
             | Operation::TaprootTxoToTxo
+            | Operation::TaprootSpendInfoSelectLeaf { .. }
+            | Operation::TaprootScriptsUseLeaf
+            | Operation::TaprootTxoUseLeaf
             | Operation::AddTapLeaf
             | Operation::EndTaprootTree => false,
         }
@@ -612,6 +625,9 @@ impl Operation {
             | Operation::TaprootTxoToSpendInfo
             | Operation::TaprootTxoToKeypair
             | Operation::TaprootTxoToTxo
+            | Operation::TaprootSpendInfoSelectLeaf { .. }
+            | Operation::TaprootScriptsUseLeaf
+            | Operation::TaprootTxoUseLeaf
             | Operation::BeginTaprootTree
             | Operation::AddTapLeaf
             | Operation::BeginBuildTx
@@ -797,6 +813,9 @@ impl Operation {
             Operation::TaprootTxoToSpendInfo => vec![Variable::TaprootSpendInfo],
             Operation::TaprootTxoToKeypair => vec![Variable::TaprootKeypair],
             Operation::TaprootTxoToTxo => vec![Variable::Txo],
+            Operation::TaprootSpendInfoSelectLeaf { .. } => vec![Variable::TaprootLeaf],
+            Operation::TaprootScriptsUseLeaf => vec![Variable::Scripts],
+            Operation::TaprootTxoUseLeaf => vec![Variable::Txo],
             Operation::BeginTaprootTree => vec![],
             Operation::AddTapLeaf => vec![],
             Operation::EndTaprootTree => vec![Variable::TaprootSpendInfo],
@@ -952,6 +971,9 @@ impl Operation {
             Operation::TaprootTxoToSpendInfo => vec![Variable::TaprootTxo],
             Operation::TaprootTxoToKeypair => vec![Variable::TaprootTxo],
             Operation::TaprootTxoToTxo => vec![Variable::TaprootTxo],
+            Operation::TaprootSpendInfoSelectLeaf { .. } => vec![Variable::TaprootSpendInfo],
+            Operation::TaprootScriptsUseLeaf => vec![Variable::Scripts, Variable::TaprootLeaf],
+            Operation::TaprootTxoUseLeaf => vec![Variable::Txo, Variable::TaprootLeaf],
             Operation::EndTaprootTree => vec![Variable::MutTaprootTree, Variable::TaprootKeypair],
             Operation::AddTapLeaf => vec![
                 Variable::MutTaprootTree,
@@ -1060,6 +1082,9 @@ impl Operation {
             | Operation::TaprootTxoToSpendInfo
             | Operation::TaprootTxoToKeypair
             | Operation::TaprootTxoToTxo
+            | Operation::TaprootSpendInfoSelectLeaf { .. }
+            | Operation::TaprootScriptsUseLeaf
+            | Operation::TaprootTxoUseLeaf
             | Operation::EndBuildTx
             | Operation::EndBuildTxInputs
             | Operation::EndBuildTxOutputs
