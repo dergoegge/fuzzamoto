@@ -222,6 +222,7 @@ impl<R: RngCore> Generator<R> for TaprootTreeSpendGenerator {
         let mut_tree_var = builder.force_append_expect_output(vec![], Operation::BeginTaprootTree);
         let leaf_count = rng.gen_range(2..=4);
         for _ in 0..leaf_count {
+            maybe_insert_hidden_nodes(builder, rng, mut_tree_var.index);
             let script_var = builder
                 .force_append_expect_output(vec![], Operation::LoadBytes(random_tapscript(rng)));
             let version_var = builder.force_append_expect_output(
@@ -230,7 +231,9 @@ impl<R: RngCore> Generator<R> for TaprootTreeSpendGenerator {
             );
             builder.force_append(
                 vec![mut_tree_var.index, script_var.index, version_var.index],
-                Operation::AddTapLeaf,
+                Operation::AddTapLeaf {
+                    depth: random_leaf_depth(rng),
+                },
             );
         }
         let spend_info_var = builder.force_append_expect_output(
@@ -343,6 +346,41 @@ fn random_tapscript<R: RngCore>(rng: &mut R) -> Vec<u8> {
             script
         }
         _ => vec![0x50],
+    }
+}
+
+fn random_leaf_depth<R: RngCore>(rng: &mut R) -> u8 {
+    rng.gen_range(0..=3)
+}
+
+fn random_node_hash<R: RngCore>(rng: &mut R) -> [u8; 32] {
+    let mut hash = [0u8; 32];
+    rng.fill_bytes(&mut hash);
+    hash
+}
+
+fn maybe_insert_hidden_nodes<R: RngCore>(
+    builder: &mut ProgramBuilder,
+    rng: &mut R,
+    tree_var_index: usize,
+) {
+    const MAX_HIDDEN_NODES: usize = 2;
+    const MIN_DEPTH: u8 = 1;
+    const MAX_DEPTH: u8 = 3;
+
+    if !rng.gen_bool(0.5) {
+        return;
+    }
+
+    let hidden_count = rng.gen_range(1..=MAX_HIDDEN_NODES);
+    for _ in 0..hidden_count {
+        builder.force_append(
+            vec![tree_var_index],
+            Operation::AddTaprootHiddenNode {
+                depth: rng.gen_range(MIN_DEPTH..=MAX_DEPTH),
+                hash: random_node_hash(rng),
+            },
+        );
     }
 }
 

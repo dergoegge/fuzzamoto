@@ -69,7 +69,7 @@ impl<R: RngCore> Mutator<R> for TaprootScriptMutator {
         let mut candidates = Vec::new();
 
         for instr in &program.instructions {
-            if let Operation::AddTapLeaf = instr.operation {
+            if let Operation::AddTapLeaf { .. } = instr.operation {
                 if let Some(script_var) = instr.inputs.get(1) {
                     if let Some(prod_idx) = producers.get(*script_var) {
                         if matches!(

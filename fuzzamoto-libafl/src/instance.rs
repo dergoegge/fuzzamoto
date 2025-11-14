@@ -6,7 +6,8 @@ use fuzzamoto_ir::{
     CompactFilterQueryGenerator, GetDataGenerator, HeaderGenerator, InputMutator,
     InventoryGenerator, LargeTxGenerator, LongChainGenerator, OneParentOneChildGenerator,
     OperationMutator, Program, SendBlockGenerator, SendMessageGenerator, SingleTxGenerator,
-    TaprootKeyPathGenerator, TaprootLeafSelectMutator, TaprootScriptPathGenerator,
+    TaprootKeyPathGenerator, TaprootLeafSelectMutator, TaprootScriptMutator,
+    TaprootScriptPathGenerator,
     TaprootTreeSpendGenerator, TxoGenerator, WitnessGenerator, cutting::CuttingMinimizer,
     instr_block::InstrBlockMinimizer, nopping::NoppingMinimizer,
 };

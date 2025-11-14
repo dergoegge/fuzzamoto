@@ -160,7 +160,13 @@ pub enum Operation {
     TaprootScriptsUseAnnex,
     TaprootTxoUseAnnex,
     BeginTaprootTree,
-    AddTapLeaf,
+    AddTapLeaf {
+        depth: u8,
+    },
+    AddTaprootHiddenNode {
+        depth: u8,
+        hash: [u8; 32],
+    },
     EndTaprootTree,
     LoadTaprootLeafVersion(u8),
     // TODO: SendCompactBlock
@@ -349,7 +355,10 @@ impl fmt::Display for Operation {
             Operation::TaprootScriptsUseAnnex => write!(f, "TaprootScriptsUseAnnex"),
             Operation::TaprootTxoUseAnnex => write!(f, "TaprootTxoUseAnnex"),
             Operation::BeginTaprootTree => write!(f, "BeginTaprootTree"),
-            Operation::AddTapLeaf => write!(f, "AddTapLeaf"),
+            Operation::AddTapLeaf { depth } => write!(f, "AddTapLeaf({})", depth),
+            Operation::AddTaprootHiddenNode { depth, hash } => {
+                write!(f, "AddTaprootHiddenNode({}, {})", depth, hex_string(hash))
+            }
             Operation::EndTaprootTree => write!(f, "EndTaprootTree"),
             Operation::LoadTaprootLeafVersion(version) => {
                 write!(f, "LoadTaprootLeafVersion({})", version)
@@ -381,7 +390,8 @@ impl Operation {
             Operation::AddTxidWithWitnessInv if index == 0 => true,
             Operation::AddWtxidInv if index == 0 => true,
             Operation::AddTx if index == 0 => true,
-            Operation::AddTapLeaf if index == 0 => true,
+            Operation::AddTapLeaf { .. } if index == 0 => true,
+            Operation::AddTaprootHiddenNode { .. } if index == 0 => true,
             _ => false,
         }
     }
@@ -485,7 +495,8 @@ impl Operation {
             | Operation::TaprootTxoUseLeaf
             | Operation::TaprootScriptsUseAnnex
             | Operation::TaprootTxoUseAnnex
-            | Operation::AddTapLeaf
+            | Operation::AddTapLeaf { .. }
+            | Operation::AddTaprootHiddenNode { .. }
             | Operation::EndTaprootTree
             | Operation::SendBlockNoWit => false,
         }
@@ -575,7 +586,8 @@ impl Operation {
             | Operation::TaprootScriptsUseAnnex
             | Operation::TaprootTxoUseAnnex
             | Operation::BeginTaprootTree
-            | Operation::AddTapLeaf
+            | Operation::AddTapLeaf { .. }
+            | Operation::AddTaprootHiddenNode { .. }
             | Operation::BeginBuildTx
             | Operation::BeginBuildTxInputs
             | Operation::BeginBuildTxOutputs
@@ -746,7 +758,8 @@ impl Operation {
             Operation::TaprootScriptsUseAnnex => vec![Variable::Scripts],
             Operation::TaprootTxoUseAnnex => vec![Variable::Txo],
             Operation::BeginTaprootTree => vec![],
-            Operation::AddTapLeaf => vec![],
+            Operation::AddTapLeaf { .. } => vec![],
+            Operation::AddTaprootHiddenNode { .. } => vec![],
             Operation::EndTaprootTree => vec![Variable::TaprootSpendInfo],
             Operation::LoadTaprootLeafVersion(_) => vec![Variable::TaprootLeafVersion],
 
@@ -895,11 +908,12 @@ impl Operation {
             }
             Operation::TaprootTxoUseAnnex => vec![Variable::Txo, Variable::TaprootAnnex],
             Operation::EndTaprootTree => vec![Variable::MutTaprootTree, Variable::TaprootKeypair],
-            Operation::AddTapLeaf => vec![
+            Operation::AddTapLeaf { .. } => vec![
                 Variable::MutTaprootTree,
                 Variable::Bytes,
                 Variable::TaprootLeafVersion,
             ],
+            Operation::AddTaprootHiddenNode { .. } => vec![Variable::MutTaprootTree],
             // Operations with no inputs
             Operation::Nop { .. }
             | Operation::LoadBytes(_)
@@ -1009,7 +1023,8 @@ impl Operation {
             | Operation::EndWitnessStack
             | Operation::AddWitness
             | Operation::EndBuildInventory
-            | Operation::AddTapLeaf
+            | Operation::AddTapLeaf { .. }
+            | Operation::AddTaprootHiddenNode { .. }
             | Operation::EndTaprootTree
             | Operation::AddCompactBlockInv
             | Operation::AddTxidInv
