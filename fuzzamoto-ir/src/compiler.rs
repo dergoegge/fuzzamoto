@@ -1801,15 +1801,16 @@ impl Compiler {
 mod tests {
     use super::*;
     use crate::{
-        Operation, Program, ProgramBuilder, ProgramContext, TaprootKeypair, TaprootSpendInfo,
-        TaprootTxo,
+        Operation, Program, ProgramBuilder, ProgramContext, TaprootKeypair, TaprootLeaf,
+        TaprootSpendInfo, TaprootTxo,
     };
     use bitcoin::{
-        ScriptBuf, Transaction,
         consensus::Decodable,
         opcodes::all::OP_PUSHNUM_1,
         script::PushBytesBuf,
         secp256k1::{Keypair, Parity, Secp256k1, SecretKey, XOnlyPublicKey},
+        taproot::{LeafVersion, TaprootBuilder},
+        ScriptBuf, Transaction,
     };
 
     #[test]
@@ -1828,6 +1829,38 @@ mod tests {
         assert_eq!(tx.input.len(), 1);
         assert!(tx.input[0].witness.len() >= 2);
         assert_eq!(tx.input[0].witness[0], annex);
+    }
+
+    #[test]
+    fn compile_taproot_key_path_produces_expected_tx() {
+        let taproot_txo = sample_taproot_txo();
+        let program = build_key_path_program(taproot_txo);
+        let tx = compile_program_to_transaction(&program);
+        assert_eq!(tx.input.len(), 1);
+        assert_eq!(tx.input[0].witness.len(), 1);
+        let actual_hex = serialize_tx_hex(&tx);
+        assert_eq!(
+            actual_hex,
+            "0200000000010111111111111111111111111111111111111111111111111111111111111111110000000000feffffff01e8030000000000000451024e73014017cd3fa6d14090c717fc33f033dbda9ba99fccdf3b2122835d83e618b4d4810722c96ae64640ab3b40d244e1e7cf6a6acb4e4620867691f23eaeb038cfeb2a9900000000"
+        );
+    }
+
+    #[test]
+    fn compile_taproot_script_path_produces_expected_tx() {
+        let taproot_txo = sample_script_path_taproot_txo();
+        let program = build_script_path_program(taproot_txo.clone());
+        let tx = compile_program_to_transaction(&program);
+        assert_eq!(tx.input.len(), 1);
+        assert_eq!(tx.input[0].witness.len(), 3);
+        assert_eq!(
+            tx.input[0].witness[1],
+            taproot_txo.spend_info.leaves[0].script
+        );
+        let actual_hex = serialize_tx_hex(&tx);
+        assert_eq!(
+            actual_hex,
+            "0200000000010122222222222222222222222222222222222222222222222222222222222222220000000000feffffff01dc050000000000000451024e730340d3ae6bfda0b8652385157152dfc0f586ecf68a52199e9009c52be0250d9dc2fe973f4d7edde98179af5fbe12a42dca2e94ede2fc769a049257f84927025a9810015121c162c0a046dacce86ddd0343c6d3c7c79c2208ba0d9c9cf24a6d046d21d21f90f700000000"
+        );
     }
 
     fn build_annex_program(taproot_txo: TaprootTxo, annex: Vec<u8>) -> Program {
@@ -1913,6 +1946,156 @@ mod tests {
                 script_pubkey,
                 leaves: Vec::new(),
             },
+        }
+    }
+
+    fn sample_script_path_taproot_txo() -> TaprootTxo {
+        let secp = Secp256k1::new();
+        let secret_key = SecretKey::from_slice(&[5u8; 32]).unwrap();
+        let keypair = Keypair::from_secret_key(&secp, &secret_key);
+        let (internal_key, parity) = XOnlyPublicKey::from_keypair(&keypair);
+        let script = ScriptBuf::builder().push_opcode(OP_PUSHNUM_1).into_script();
+        let mut builder = TaprootBuilder::new();
+        builder = builder
+            .add_leaf_with_ver(0, script.clone(), LeafVersion::TapScript)
+            .expect("add tapleaf");
+        let spend_info = builder.finalize(&secp, internal_key).expect("finalize");
+
+        let control_block = spend_info
+            .control_block(&(script.clone(), LeafVersion::TapScript))
+            .expect("control block");
+        let leaf = TaprootLeaf {
+            version: LeafVersion::TapScript.to_consensus(),
+            script: script.as_bytes().to_vec(),
+            merkle_branch: control_block
+                .merkle_branch
+                .iter()
+                .map(|hash| *hash.as_byte_array())
+                .collect(),
+        };
+
+        let output_key_bytes = spend_info.output_key().to_x_only_public_key().serialize();
+        let push_bytes = PushBytesBuf::try_from(output_key_bytes.to_vec()).expect("push bytes");
+        let script_pubkey = ScriptBuf::builder()
+            .push_opcode(OP_PUSHNUM_1)
+            .push_slice(&push_bytes)
+            .into_bytes();
+
+        TaprootTxo {
+            outpoint: ([0x22; 32], 0),
+            value: 60_000,
+            spend_info: TaprootSpendInfo {
+                keypair: TaprootKeypair {
+                    secret_key: secret_key.secret_bytes(),
+                    public_key: internal_key.serialize(),
+                },
+                merkle_root: spend_info.merkle_root().map(|root| *root.as_byte_array()),
+                output_key: output_key_bytes,
+                output_key_parity: match parity {
+                    Parity::Even => 0,
+                    Parity::Odd => 1,
+                },
+                script_pubkey,
+                leaves: vec![leaf],
+            },
+        }
+    }
+
+    fn compile_program_to_transaction(program: &Program) -> Transaction {
+        let mut compiler = Compiler::new();
+        let compiled = compiler.compile(program).expect("program compiles");
+        let bytes = match compiled.actions.first() {
+            Some(CompiledAction::SendRawMessage(_, cmd, payload)) if cmd == "tx" => payload.clone(),
+            other => panic!("unexpected action {:?}", other),
+        };
+        Transaction::consensus_decode(&mut bytes.as_slice()).expect("tx decode")
+    }
+
+    fn serialize_tx_hex(tx: &Transaction) -> String {
+        bitcoin::consensus::serialize(tx)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    }
+
+    fn build_key_path_program(taproot_txo: TaprootTxo) -> Program {
+        let mut builder = ProgramBuilder::new(test_context());
+        let connection = builder.force_append_expect_output(vec![], Operation::LoadConnection(0));
+        let taproot_var = builder
+            .force_append_expect_output(vec![], Operation::LoadTaprootTxo { txo: taproot_txo });
+        let txo_var =
+            builder.force_append_expect_output(vec![taproot_var.index], Operation::TaprootTxoToTxo);
+        let tx = build_single_input_transaction(&mut builder, txo_var.index, 1_000);
+        builder.force_append(vec![connection.index, tx.index], Operation::SendTx);
+        builder.finalize().expect("valid program")
+    }
+
+    fn build_script_path_program(taproot_txo: TaprootTxo) -> Program {
+        let mut builder = ProgramBuilder::new(test_context());
+        let connection = builder.force_append_expect_output(vec![], Operation::LoadConnection(0));
+        let taproot_var = builder
+            .force_append_expect_output(vec![], Operation::LoadTaprootTxo { txo: taproot_txo });
+        let spend_info_var = builder
+            .force_append_expect_output(vec![taproot_var.index], Operation::TaprootTxoToSpendInfo);
+        let leaf_var = builder.force_append_expect_output(
+            vec![spend_info_var.index],
+            Operation::TaprootSpendInfoSelectLeaf { index: 0 },
+        );
+        let txo_var =
+            builder.force_append_expect_output(vec![taproot_var.index], Operation::TaprootTxoToTxo);
+        let txo_var = builder.force_append_expect_output(
+            vec![txo_var.index, leaf_var.index],
+            Operation::TaprootTxoUseLeaf,
+        );
+        let tx = build_single_input_transaction(&mut builder, txo_var.index, 1_500);
+        builder.force_append(vec![connection.index, tx.index], Operation::SendTx);
+        builder.finalize().expect("valid program")
+    }
+
+    fn build_single_input_transaction(
+        builder: &mut ProgramBuilder,
+        txo_index: usize,
+        output_amount: u64,
+    ) -> crate::builder::IndexedVariable {
+        let tx_version = builder.force_append_expect_output(vec![], Operation::LoadTxVersion(2));
+        let lock_time = builder.force_append_expect_output(vec![], Operation::LoadLockTime(0));
+        let mut_tx = builder.force_append_expect_output(
+            vec![tx_version.index, lock_time.index],
+            Operation::BeginBuildTx,
+        );
+
+        let mut_inputs = builder.force_append_expect_output(vec![], Operation::BeginBuildTxInputs);
+        let sequence =
+            builder.force_append_expect_output(vec![], Operation::LoadSequence(0xffff_fffe));
+        builder.force_append(
+            vec![mut_inputs.index, txo_index, sequence.index],
+            Operation::AddTxInput,
+        );
+        let const_inputs =
+            builder.force_append_expect_output(vec![mut_inputs.index], Operation::EndBuildTxInputs);
+
+        let mut_outputs = builder
+            .force_append_expect_output(vec![const_inputs.index], Operation::BeginBuildTxOutputs);
+        let scripts = builder.force_append_expect_output(vec![], Operation::BuildPayToAnchor);
+        let amount = builder.force_append_expect_output(vec![], Operation::LoadAmount(output_amount));
+        builder.force_append(
+            vec![mut_outputs.index, scripts.index, amount.index],
+            Operation::AddTxOutput,
+        );
+        let const_outputs = builder
+            .force_append_expect_output(vec![mut_outputs.index], Operation::EndBuildTxOutputs);
+
+        builder.force_append_expect_output(
+            vec![mut_tx.index, const_inputs.index, const_outputs.index],
+            Operation::EndBuildTx,
+        )
+    }
+
+    fn test_context() -> ProgramContext {
+        ProgramContext {
+            num_nodes: 1,
+            num_connections: 1,
+            timestamp: 0,
         }
     }
 }
