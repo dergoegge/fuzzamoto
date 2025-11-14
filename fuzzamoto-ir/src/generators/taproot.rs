@@ -1,4 +1,7 @@
-use bitcoin::opcodes::all::{OP_CHECKSIG, OP_PUSHNUM_1};
+use bitcoin::{
+    opcodes::all::{OP_CHECKSIG, OP_PUSHNUM_1},
+    taproot::LeafVersion,
+};
 use rand::{Rng, RngCore, seq::SliceRandom};
 
 use crate::{
@@ -221,21 +224,41 @@ impl<R: RngCore> Generator<R> for TaprootTreeSpendGenerator {
 
         let mut_tree_var = builder.force_append_expect_output(vec![], Operation::BeginTaprootTree);
         let leaf_count = rng.gen_range(2..=4);
-        for _ in 0..leaf_count {
+        let mut deepest_leaf_depth = 0u8;
+        let mut saw_non_default_version = false;
+        for leaf_idx in 0..leaf_count {
             maybe_insert_hidden_nodes(builder, rng, mut_tree_var.index);
+
             let script_var = builder
                 .force_append_expect_output(vec![], Operation::LoadBytes(random_tapscript(rng)));
+            let (candidate_version, is_non_default) = random_leaf_version(rng);
+            let mut final_version = candidate_version;
+            let mut produced_non_default = is_non_default;
+            if leaf_idx == leaf_count - 1 && !saw_non_default_version && !produced_non_default {
+                final_version = pick_strict_non_default_version(rng);
+                produced_non_default = true;
+            }
+            saw_non_default_version |= produced_non_default;
             let version_var = builder.force_append_expect_output(
                 vec![],
-                Operation::LoadTaprootLeafVersion(random_leaf_version(rng)),
+                Operation::LoadTaprootLeafVersion(final_version),
             );
+
+            let depth = if leaf_idx == 0 {
+                random_leaf_depth(rng, true)
+            } else {
+                random_leaf_depth(rng, false)
+            };
+            deepest_leaf_depth = deepest_leaf_depth.max(depth);
+
             builder.force_append(
                 vec![mut_tree_var.index, script_var.index, version_var.index],
-                Operation::AddTapLeaf {
-                    depth: random_leaf_depth(rng),
-                },
+                Operation::AddTapLeaf { depth },
             );
         }
+        // Inject an additional hidden node near the deepest visible leaf so the resulting control
+        // block includes multiple merkle branch hashes.
+        maybe_attach_deep_hidden_node(builder, rng, mut_tree_var.index, deepest_leaf_depth);
         let spend_info_var = builder.force_append_expect_output(
             vec![mut_tree_var.index, keypair_var.index],
             Operation::EndTaprootTree,
@@ -327,8 +350,16 @@ fn random_annex<R: RngCore>(rng: &mut R) -> Vec<u8> {
     annex
 }
 
-/// Pick an arbitrary tapscript leaf version in the v1 range.
-fn random_leaf_version<R: RngCore>(rng: &mut R) -> u8 {
+/// Returns a consensus tapleaf version plus a flag indicating whether it is non-default.
+fn random_leaf_version<R: RngCore>(rng: &mut R) -> (u8, bool) {
+    if rng.gen_bool(0.5) {
+        (LeafVersion::TapScript.to_consensus(), false)
+    } else {
+        (pick_strict_non_default_version(rng), true)
+    }
+}
+
+fn pick_strict_non_default_version<R: RngCore>(rng: &mut R) -> u8 {
     *[0xC0u8, 0xC2, 0xC4, 0xD0].choose(rng).unwrap()
 }
 
@@ -349,8 +380,13 @@ fn random_tapscript<R: RngCore>(rng: &mut R) -> Vec<u8> {
     }
 }
 
-fn random_leaf_depth<R: RngCore>(rng: &mut R) -> u8 {
-    rng.gen_range(0..=3)
+fn random_leaf_depth<R: RngCore>(rng: &mut R, ensure_depth: bool) -> u8 {
+    if ensure_depth {
+        // Force the first leaf to dig deep so each tree yields at least one long merkle branch.
+        rng.gen_range(3..=5)
+    } else {
+        rng.gen_range(0..=5)
+    }
 }
 
 fn random_node_hash<R: RngCore>(rng: &mut R) -> [u8; 32] {
@@ -378,6 +414,29 @@ fn maybe_insert_hidden_nodes<R: RngCore>(
             vec![tree_var_index],
             Operation::AddTaprootHiddenNode {
                 depth: rng.gen_range(MIN_DEPTH..=MAX_DEPTH),
+                hash: random_node_hash(rng),
+            },
+        );
+    }
+}
+
+/// Add a hidden sibling near the deepest visible leaf so script-path witnesses
+/// exercise multi-hash control blocks.
+fn maybe_attach_deep_hidden_node<R: RngCore>(
+    builder: &mut ProgramBuilder,
+    rng: &mut R,
+    tree_index: usize,
+    deepest_leaf_depth: u8,
+) {
+    if deepest_leaf_depth <= 1 {
+        return;
+    }
+    let depth = deepest_leaf_depth.saturating_sub(1);
+    if rng.gen_bool(0.5) {
+        builder.force_append(
+            vec![tree_index],
+            Operation::AddTaprootHiddenNode {
+                depth,
                 hash: random_node_hash(rng),
             },
         );

@@ -1903,6 +1903,7 @@ mod tests {
     #[test]
     fn compile_taproot_tree_with_hidden_node_exposes_branch_hash() {
         const HIDDEN_HASH: [u8; 32] = [0x42u8; 32];
+        const NON_DEFAULT_LEAF_VERSION: u8 = 0xC0;
 
         let taproot_txo = sample_taproot_txo();
         let mut builder = ProgramBuilder::new(test_context());
@@ -1922,11 +1923,11 @@ mod tests {
                 hash: HIDDEN_HASH,
             },
         );
-        let script_var = builder
-            .force_append_expect_output(vec![], Operation::LoadBytes(vec![OP_PUSHNUM_1.to_u8()]));
+        let script_var =
+            builder.force_append_expect_output(vec![], Operation::LoadBytes(vec![0x50]));
         let version_var = builder.force_append_expect_output(
             vec![],
-            Operation::LoadTaprootLeafVersion(LeafVersion::TapScript.to_consensus()),
+            Operation::LoadTaprootLeafVersion(NON_DEFAULT_LEAF_VERSION),
         );
         builder.force_append(
             vec![mut_tree.index, script_var.index, version_var.index],
@@ -1973,8 +1974,11 @@ mod tests {
         let child_tx = Transaction::consensus_decode(&mut child_payload.as_slice()).unwrap();
         assert_eq!(child_tx.input.len(), 1);
         assert_eq!(child_tx.input[0].witness.len(), 3);
+        assert_eq!(child_tx.input[0].witness[1], vec![0x50]);
         let control_block = &child_tx.input[0].witness[2];
         assert_eq!(control_block.len(), 33 + 32);
+        let version_bits = control_block[0] & !0x3;
+        assert_eq!(version_bits, NON_DEFAULT_LEAF_VERSION);
         assert_eq!(&control_block[33..], &HIDDEN_HASH);
     }
 
