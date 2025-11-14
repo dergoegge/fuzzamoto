@@ -7,8 +7,9 @@ use fuzzamoto_ir::{
     GetDataGenerator, HeaderGenerator, InputMutator, InventoryGenerator, LargeTxGenerator,
     LongChainGenerator, OneParentOneChildGenerator, OperationMutator, Program, SendBlockGenerator,
     SendMessageGenerator, SingleTxGenerator, TaprootKeyPathGenerator, TaprootLeafSelectMutator,
-    TaprootScriptPathGenerator, TaprootTreeSpendGenerator, TxoGenerator, WitnessGenerator,
-    cutting::CuttingMinimizer, instr_block::InstrBlockMinimizer, nopping::NoppingMinimizer,
+    TaprootScriptMutator, TaprootScriptPathGenerator, TaprootTreeSpendGenerator, TxoGenerator,
+    WitnessGenerator, cutting::CuttingMinimizer, instr_block::InstrBlockMinimizer,
+    nopping::NoppingMinimizer,
 };
 
 use libafl::{

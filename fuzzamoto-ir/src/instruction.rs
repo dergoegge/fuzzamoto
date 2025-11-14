@@ -164,7 +164,8 @@ impl Instruction {
             | Operation::TaprootTxoUseLeaf
             | Operation::TaprootScriptsUseAnnex
             | Operation::TaprootTxoUseAnnex
-            | Operation::AddTapLeaf
+            | Operation::AddTapLeaf { .. }
+            | Operation::AddTaprootHiddenNode { .. }
             | Operation::TakeTxo => true,
 
             Operation::Nop { .. }

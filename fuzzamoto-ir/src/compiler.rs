@@ -118,12 +118,20 @@ struct Witness {
 #[derive(Clone, Debug)]
 struct TaprootTreeBuilder {
     leaves: Vec<TaprootLeafPlan>,
+    hidden_nodes: Vec<TaprootHiddenNodePlan>,
 }
 
 #[derive(Clone, Debug)]
 struct TaprootLeafPlan {
     script: Vec<u8>,
     version: LeafVersion,
+    depth: u8,
+}
+
+#[derive(Clone, Debug)]
+struct TaprootHiddenNodePlan {
+    depth: u8,
+    hash: [u8; 32],
 }
 
 fn build_control_block(
@@ -260,7 +268,10 @@ impl Compiler {
                 | Operation::TaprootTxoUseAnnex => {
                     self.handle_taproot_conversions(&instruction)?;
                 }
-                Operation::BeginTaprootTree | Operation::AddTapLeaf | Operation::EndTaprootTree => {
+                Operation::BeginTaprootTree
+                | Operation::AddTapLeaf { .. }
+                | Operation::AddTaprootHiddenNode { .. }
+                | Operation::EndTaprootTree => {
                     self.handle_taproot_tree_operations(&instruction)?;
                 }
                 Operation::LoadTaprootLeafVersion(_) => {
@@ -870,16 +881,30 @@ impl Compiler {
     ) -> Result<(), CompilerError> {
         match &instruction.operation {
             Operation::BeginTaprootTree => {
-                self.append_variable(TaprootTreeBuilder { leaves: Vec::new() });
+                self.append_variable(TaprootTreeBuilder {
+                    leaves: Vec::new(),
+                    hidden_nodes: Vec::new(),
+                });
             }
-            Operation::AddTapLeaf => {
+            Operation::AddTapLeaf { depth } => {
                 let script = self.get_input::<Vec<u8>>(&instruction.inputs, 1)?.clone();
                 let version_byte = *self.get_input::<u8>(&instruction.inputs, 2)?;
                 let version = LeafVersion::from_consensus(version_byte).map_err(|e| {
                     CompilerError::MiscError(format!("invalid taproot leaf version: {e:?}"))
                 })?;
                 let builder = self.get_input_mut::<TaprootTreeBuilder>(&instruction.inputs, 0)?;
-                builder.leaves.push(TaprootLeafPlan { script, version });
+                builder.leaves.push(TaprootLeafPlan {
+                    script,
+                    version,
+                    depth: *depth,
+                });
+            }
+            Operation::AddTaprootHiddenNode { depth, hash } => {
+                let builder = self.get_input_mut::<TaprootTreeBuilder>(&instruction.inputs, 0)?;
+                builder.hidden_nodes.push(TaprootHiddenNodePlan {
+                    depth: *depth,
+                    hash: *hash,
+                });
             }
             Operation::EndTaprootTree => {
                 let builder = self.get_input::<TaprootTreeBuilder>(&instruction.inputs, 0)?;
@@ -898,9 +923,21 @@ impl Compiler {
                 for leaf in &builder.leaves {
                     let script_buf = ScriptBuf::from(leaf.script.clone());
                     taproot_builder = taproot_builder
-                        .add_leaf_with_ver(0, script_buf, leaf.version)
+                        .add_leaf_with_ver(leaf.depth, script_buf, leaf.version)
                         .map_err(|e| {
                             CompilerError::MiscError(format!("failed to add tapleaf: {e:?}"))
+                        })?;
+                }
+                for hidden in &builder.hidden_nodes {
+                    let hash = TapNodeHash::from_slice(&hidden.hash).map_err(|_| {
+                        CompilerError::MiscError("invalid taproot hidden node hash".to_string())
+                    })?;
+                    taproot_builder = taproot_builder
+                        .add_hidden_node(hidden.depth, hash)
+                        .map_err(|e| {
+                            CompilerError::MiscError(format!(
+                                "failed to add hidden taproot node: {e:?}"
+                            ))
                         })?;
                 }
 
@@ -2060,12 +2097,12 @@ mod tests {
         TaprootSpendInfo, TaprootTxo,
     };
     use bitcoin::{
+        ScriptBuf, Transaction,
         consensus::Decodable,
         opcodes::all::OP_PUSHNUM_1,
         script::PushBytesBuf,
         secp256k1::{Keypair, Parity, Secp256k1, SecretKey, XOnlyPublicKey},
         taproot::{LeafVersion, TaprootBuilder},
-        ScriptBuf, Transaction,
     };
 
     #[test]
@@ -2273,6 +2310,84 @@ mod tests {
         );
     }
 
+    #[test]
+    fn compile_taproot_tree_with_hidden_node_exposes_branch_hash() {
+        const HIDDEN_HASH: [u8; 32] = [0x42u8; 32];
+
+        let taproot_txo = sample_taproot_txo();
+        let mut builder = ProgramBuilder::new(test_context());
+        let connection = builder.force_append_expect_output(vec![], Operation::LoadConnection(0));
+        let taproot_var = builder
+            .force_append_expect_output(vec![], Operation::LoadTaprootTxo { txo: taproot_txo });
+        let keypair_var = builder
+            .force_append_expect_output(vec![taproot_var.index], Operation::TaprootTxoToKeypair);
+        let funding_txo_var =
+            builder.force_append_expect_output(vec![taproot_var.index], Operation::TaprootTxoToTxo);
+
+        let mut_tree = builder.force_append_expect_output(vec![], Operation::BeginTaprootTree);
+        builder.force_append(
+            vec![mut_tree.index],
+            Operation::AddTaprootHiddenNode {
+                depth: 1,
+                hash: HIDDEN_HASH,
+            },
+        );
+        let script_var = builder
+            .force_append_expect_output(vec![], Operation::LoadBytes(vec![OP_PUSHNUM_1.to_u8()]));
+        let version_var = builder.force_append_expect_output(
+            vec![],
+            Operation::LoadTaprootLeafVersion(LeafVersion::TapScript.to_consensus()),
+        );
+        builder.force_append(
+            vec![mut_tree.index, script_var.index, version_var.index],
+            Operation::AddTapLeaf { depth: 1 },
+        );
+        let spend_info_var = builder.force_append_expect_output(
+            vec![mut_tree.index, keypair_var.index],
+            Operation::EndTaprootTree,
+        );
+        let pay_to_taproot = builder
+            .force_append_expect_output(vec![spend_info_var.index], Operation::BuildPayToTaproot);
+
+        let parent_value = 40_000;
+        let parent_tx = build_single_output_tx_for_tests(
+            &mut builder,
+            funding_txo_var.index,
+            pay_to_taproot.index,
+            parent_value,
+        );
+        let produced =
+            builder.force_append_expect_output(vec![parent_tx.index], Operation::TakeTxo);
+        let leaf_var = builder.force_append_expect_output(
+            vec![spend_info_var.index],
+            Operation::TaprootSpendInfoSelectLeaf { index: 0 },
+        );
+        let spend_txo_var = builder.force_append_expect_output(
+            vec![produced.index, leaf_var.index],
+            Operation::TaprootTxoUseLeaf,
+        );
+        let child_tx =
+            build_single_input_transaction(&mut builder, spend_txo_var.index, parent_value - 500);
+
+        builder.force_append(vec![connection.index, parent_tx.index], Operation::SendTx);
+        builder.force_append(vec![connection.index, child_tx.index], Operation::SendTx);
+
+        let program = builder.finalize().expect("valid tree program");
+        let mut compiler = Compiler::new();
+        let compiled = compiler.compile(&program).expect("compile");
+
+        let child_payload = match compiled.actions.get(1) {
+            Some(CompiledAction::SendRawMessage(_, cmd, payload)) if cmd == "tx" => payload.clone(),
+            other => panic!("unexpected action {:?}", other),
+        };
+        let child_tx = Transaction::consensus_decode(&mut child_payload.as_slice()).unwrap();
+        assert_eq!(child_tx.input.len(), 1);
+        assert_eq!(child_tx.input[0].witness.len(), 3);
+        let control_block = &child_tx.input[0].witness[2];
+        assert_eq!(control_block.len(), 33 + 32);
+        assert_eq!(&control_block[33..], &HIDDEN_HASH);
+    }
+
     fn build_annex_program(taproot_txo: TaprootTxo, annex: Vec<u8>) -> Program {
         let mut builder = ProgramBuilder::new(ProgramContext {
             num_nodes: 1,
@@ -2462,6 +2577,45 @@ mod tests {
         builder.finalize().expect("valid program")
     }
 
+    fn build_single_output_tx_for_tests(
+        builder: &mut ProgramBuilder,
+        funding_txo_index: usize,
+        scripts_index: usize,
+        amount: u64,
+    ) -> crate::builder::IndexedVariable {
+        let tx_version = builder.force_append_expect_output(vec![], Operation::LoadTxVersion(2));
+        let lock_time = builder.force_append_expect_output(vec![], Operation::LoadLockTime(0));
+        let mut_tx = builder.force_append_expect_output(
+            vec![tx_version.index, lock_time.index],
+            Operation::BeginBuildTx,
+        );
+
+        let mut_inputs = builder.force_append_expect_output(vec![], Operation::BeginBuildTxInputs);
+        let sequence =
+            builder.force_append_expect_output(vec![], Operation::LoadSequence(0xffff_fffe));
+        builder.force_append(
+            vec![mut_inputs.index, funding_txo_index, sequence.index],
+            Operation::AddTxInput,
+        );
+        let const_inputs =
+            builder.force_append_expect_output(vec![mut_inputs.index], Operation::EndBuildTxInputs);
+
+        let mut_outputs = builder
+            .force_append_expect_output(vec![const_inputs.index], Operation::BeginBuildTxOutputs);
+        let amount_var = builder.force_append_expect_output(vec![], Operation::LoadAmount(amount));
+        builder.force_append(
+            vec![mut_outputs.index, scripts_index, amount_var.index],
+            Operation::AddTxOutput,
+        );
+        let const_outputs = builder
+            .force_append_expect_output(vec![mut_outputs.index], Operation::EndBuildTxOutputs);
+
+        builder.force_append_expect_output(
+            vec![mut_tx.index, const_inputs.index, const_outputs.index],
+            Operation::EndBuildTx,
+        )
+    }
+
     fn build_single_input_transaction(
         builder: &mut ProgramBuilder,
         txo_index: usize,
@@ -2487,7 +2641,8 @@ mod tests {
         let mut_outputs = builder
             .force_append_expect_output(vec![const_inputs.index], Operation::BeginBuildTxOutputs);
         let scripts = builder.force_append_expect_output(vec![], Operation::BuildPayToAnchor);
-        let amount = builder.force_append_expect_output(vec![], Operation::LoadAmount(output_amount));
+        let amount =
+            builder.force_append_expect_output(vec![], Operation::LoadAmount(output_amount));
         builder.force_append(
             vec![mut_outputs.index, scripts.index, amount.index],
             Operation::AddTxOutput,
