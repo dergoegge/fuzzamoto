@@ -270,6 +270,10 @@ where
                 IrMutator::new(TaprootLeafSelectMutator::new(), rng.clone())
             ),
             (
+                50.0,
+                IrMutator::new(TaprootScriptMutator::new(), rng.clone())
+            ),
+            (
                 1000.0,
                 IrMutator::new(OperationMutator::new(LibAflByteMutator::new()), rng.clone())
             ),
