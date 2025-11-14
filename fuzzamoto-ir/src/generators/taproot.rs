@@ -244,6 +244,7 @@ impl<R: RngCore> Generator<R> for TaprootTreeSpendGenerator {
         if parent_value == 0 {
             return Err(GeneratorError::MissingVariables);
         }
+        // Parent tx pays to the newly constructed Taproot output.
         let parent_tx = build_single_output_tx(
             builder,
             funding_txo_var.index,
@@ -251,6 +252,7 @@ impl<R: RngCore> Generator<R> for TaprootTreeSpendGenerator {
             parent_value,
         );
 
+        // Immediately spend that output via a different tapleaf to cover control blocks.
         let produced_txo =
             builder.force_append_expect_output(vec![parent_tx.index], Operation::TakeTxo);
         let leaf_index = if leaf_count > 1 {
