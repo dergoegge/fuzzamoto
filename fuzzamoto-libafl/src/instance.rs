@@ -1,13 +1,13 @@
 use std::{borrow::Cow, cell::RefCell, marker::PhantomData, process, rc::Rc, time::Duration};
 
 use fuzzamoto_ir::{
-    AddTxToBlockGenerator, AdvanceTimeGenerator, BlockGenerator, BloomFilterAddGenerator,
-    BloomFilterClearGenerator, BloomFilterLoadGenerator, CombineMutator,
-    CompactFilterQueryGenerator, GetDataGenerator, HeaderGenerator, InputMutator,
-    InventoryGenerator, LargeTxGenerator, LongChainGenerator, OneParentOneChildGenerator,
-    OperationMutator, Program, SendBlockGenerator, SendMessageGenerator, SingleTxGenerator,
-    TxoGenerator, WitnessGenerator, cutting::CuttingMinimizer, instr_block::InstrBlockMinimizer,
-    nopping::NoppingMinimizer,
+    AddTxToBlockGenerator, AddrRelayGenerator, AddrRelayV2Generator, AdvanceTimeGenerator,
+    BlockGenerator, BloomFilterAddGenerator, BloomFilterClearGenerator, BloomFilterLoadGenerator,
+    CombineMutator, CompactFilterQueryGenerator, GetAddrGenerator, GetDataGenerator,
+    HeaderGenerator, InputMutator, InventoryGenerator, LargeTxGenerator, LongChainGenerator,
+    OneParentOneChildGenerator, OperationMutator, Program, SendBlockGenerator,
+    SendMessageGenerator, SingleTxGenerator, TxoGenerator, WitnessGenerator,
+    cutting::CuttingMinimizer, instr_block::InstrBlockMinimizer, nopping::NoppingMinimizer,
 };
 
 use libafl::{
@@ -328,6 +328,15 @@ where
                 20.0,
                 IrGenerator::new(BloomFilterClearGenerator, rng.clone())
             ),
+            (
+                20.0,
+                IrGenerator::new(AddrRelayGenerator::default(), rng.clone())
+            ),
+            (
+                20.0,
+                IrGenerator::new(AddrRelayV2Generator::default(), rng.clone())
+            ),
+            (10.0, IrGenerator::new(GetAddrGenerator, rng.clone())),
         ];
 
         let mutator = TuneableScheduledMutator::new(&mut state, mutations);

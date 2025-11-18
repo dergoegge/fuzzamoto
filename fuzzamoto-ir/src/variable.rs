@@ -10,6 +10,11 @@ pub enum Variable {
     ConnectionType,    // Connection type
     Duration,          // Duration of time
     HandshakeParams,   // p2p handshake parameters
+    AddrRecord,        // Address relay record
+    MutAddrList,       // Mutable address list
+    ConstAddrList,     // Finalized address list
+    MutAddrListV2,     // Mutable address list (addrv2)
+    ConstAddrListV2,   // Finalized address list (addrv2)
     Time,              // Point in time
     Size,              // Size in bytes
     BlockHeight,       // Block height

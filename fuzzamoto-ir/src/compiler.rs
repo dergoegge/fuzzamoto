@@ -1,4 +1,4 @@
-use std::{any::Any, time::Duration};
+use std::{any::Any, convert::TryInto, time::Duration};
 
 use bitcoin::{
     Amount, CompactTarget, EcdsaSighashType, NetworkKind, OutPoint, PrivateKey, Script, ScriptBuf,
@@ -10,6 +10,8 @@ use bitcoin::{
     key::Secp256k1,
     opcodes::{OP_0, OP_TRUE, all::OP_RETURN},
     p2p::{
+        ServiceFlags,
+        address::{AddrV2, AddrV2Message, Address},
         message_blockdata::Inventory,
         message_bloom::{BloomFlags, FilterAdd, FilterLoad},
         message_filter::{GetCFCheckpt, GetCFHeaders, GetCFilters},
@@ -20,7 +22,12 @@ use bitcoin::{
     transaction,
 };
 
-use crate::{Instruction, Operation, Program, bloom::filter_insert, generators::block::Header};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
+
+use crate::{
+    AddrNetwork, AddrRecord, Instruction, Operation, Program, bloom::filter_insert,
+    generators::block::Header,
+};
 
 /// `Compiler` is responsible for compiling IR into a sequence of low-level actions to be performed
 /// on a node (i.e. mapping `fuzzamoto_ir::Program` -> `CompiledProgram`).
@@ -142,6 +149,16 @@ struct CoinbaseTx {
     scripts: Vec<Scripts>,
 }
 
+#[derive(Clone, Debug)]
+struct AddrList {
+    entries: Vec<(u32, Address)>,
+}
+
+#[derive(Clone, Debug)]
+struct AddrListV2 {
+    entries: Vec<AddrV2Message>,
+}
+
 struct Nop;
 
 impl Compiler {
@@ -153,6 +170,7 @@ impl Compiler {
                 | Operation::LoadConnection(..)
                 | Operation::LoadConnectionType(..)
                 | Operation::LoadDuration(..)
+                | Operation::LoadAddr(..)
                 | Operation::LoadAmount(..)
                 | Operation::LoadTxVersion(..)
                 | Operation::LoadBlockVersion(..)
@@ -190,6 +208,15 @@ impl Compiler {
                 | Operation::AddBlockWithWitnessInv
                 | Operation::AddFilteredBlockInv => {
                     self.handle_inventory_operations(&instruction)?;
+                }
+
+                Operation::BeginBuildAddrList
+                | Operation::BeginBuildAddrListV2
+                | Operation::EndBuildAddrList
+                | Operation::EndBuildAddrListV2
+                | Operation::AddAddr
+                | Operation::AddAddrV2 => {
+                    self.handle_addr_operations(&instruction)?;
                 }
 
                 Operation::BeginWitnessStack
@@ -248,6 +275,9 @@ impl Compiler {
                 | Operation::SendTx
                 | Operation::SendGetData
                 | Operation::SendInv
+                | Operation::SendGetAddr
+                | Operation::SendAddr
+                | Operation::SendAddrV2
                 | Operation::SendHeader
                 | Operation::SendBlock
                 | Operation::SendBlockNoWit
@@ -342,6 +372,167 @@ impl Compiler {
             _ => unreachable!("Non-inventory operation passed to handle_inventory_operations"),
         }
         Ok(())
+    }
+
+    fn handle_addr_operations(&mut self, instruction: &Instruction) -> Result<(), CompilerError> {
+        match &instruction.operation {
+            Operation::BeginBuildAddrList => {
+                self.append_variable(AddrList {
+                    entries: Vec::new(),
+                });
+            }
+            Operation::BeginBuildAddrListV2 => {
+                self.append_variable(AddrListV2 {
+                    entries: Vec::new(),
+                });
+            }
+            Operation::AddAddr => {
+                let record = self.get_input::<AddrRecord>(&instruction.inputs, 1)?;
+                let addr_tuple = match record {
+                    AddrRecord::V1 { .. } => self.addr_v1_to_network_address(record),
+                    AddrRecord::V2 { .. } => {
+                        return Err(CompilerError::MiscError(
+                            "AddAddr expects an addr (v1) record".to_string(),
+                        ));
+                    }
+                };
+                let list = self.get_input_mut::<AddrList>(&instruction.inputs, 0)?;
+                list.entries.push(addr_tuple);
+            }
+            Operation::AddAddrV2 => {
+                let record = self.get_input::<AddrRecord>(&instruction.inputs, 1)?;
+                let entry = self.addr_v2_to_message(record)?;
+                let list = self.get_input_mut::<AddrListV2>(&instruction.inputs, 0)?;
+                list.entries.push(entry);
+            }
+            Operation::EndBuildAddrList => {
+                let list = self.get_input::<AddrList>(&instruction.inputs, 0)?;
+                self.append_variable(list.entries.clone());
+            }
+            Operation::EndBuildAddrListV2 => {
+                let list = self.get_input::<AddrListV2>(&instruction.inputs, 0)?;
+                self.append_variable(list.entries.clone());
+            }
+            _ => unreachable!("Non-address operation passed to handle_addr_operations"),
+        }
+        Ok(())
+    }
+
+    fn addr_v1_to_network_address(&self, record: &AddrRecord) -> (u32, Address) {
+        let (time, services, ip, port) = match record {
+            AddrRecord::V1 {
+                time,
+                services,
+                ip,
+                port,
+            } => (*time, *services, *ip, *port),
+            _ => unreachable!("caller filtered non-V1 record"),
+        };
+
+        let ipv6 = Ipv6Addr::from(ip);
+        let socket = if let Some(ipv4) = ipv6.to_ipv4() {
+            SocketAddr::V4(SocketAddrV4::new(ipv4, port))
+        } else {
+            SocketAddr::V6(SocketAddrV6::new(ipv6, port, 0, 0))
+        };
+        let services = self.service_flags_from_bits(services);
+        (time, Address::new(&socket, services))
+    }
+
+    fn addr_v2_to_message(&self, record: &AddrRecord) -> Result<AddrV2Message, CompilerError> {
+        let (time, services_bits, network, payload, port) = match record {
+            AddrRecord::V2 {
+                time,
+                services,
+                network,
+                payload,
+                port,
+            } => (*time, *services, network.clone(), payload.clone(), *port),
+            _ => {
+                return Err(CompilerError::MiscError(
+                    "AddAddrV2 expects an addr v2 record".to_string(),
+                ));
+            }
+        };
+
+        let services = self.service_flags_from_bits(services_bits);
+
+        if matches!(network, AddrNetwork::TorV2) {
+            return Err(CompilerError::MiscError(
+                "BIP-0155 forbids gossiping torv2 addresses".to_string(),
+            ));
+        }
+
+        if let Some(expected) = network.expected_payload_len() {
+            if payload.len() != expected {
+                return Err(CompilerError::MiscError(format!(
+                    "addrv2 payload length {} for {} (expected {} per BIP-0155)",
+                    payload.len(),
+                    network,
+                    expected
+                )));
+            }
+        } else if payload.len() > 512 {
+            return Err(CompilerError::MiscError(format!(
+                "addrv2 payload length {} exceeds 512-byte limit per BIP-0155",
+                payload.len()
+            )));
+        }
+
+        let addr = match network {
+            AddrNetwork::IPv4 => {
+                let octets: [u8; 4] = payload.as_slice().try_into().expect("length checked");
+                AddrV2::Ipv4(Ipv4Addr::from(octets))
+            }
+            AddrNetwork::IPv6 => {
+                let octets: [u8; 16] = payload.as_slice().try_into().expect("length checked");
+                AddrV2::Ipv6(Ipv6Addr::from(octets))
+            }
+            AddrNetwork::TorV2 => unreachable!("torv2 records rejected above"),
+            AddrNetwork::TorV3 => {
+                let bytes: [u8; 32] = payload.as_slice().try_into().expect("length checked");
+                AddrV2::TorV3(bytes)
+            }
+            AddrNetwork::I2p => {
+                let bytes: [u8; 32] = payload.as_slice().try_into().expect("length checked");
+                AddrV2::I2p(bytes)
+            }
+            AddrNetwork::Cjdns => {
+                let octets: [u8; 16] = payload.as_slice().try_into().expect("length checked");
+                AddrV2::Cjdns(Ipv6Addr::from(octets))
+            }
+            AddrNetwork::Yggdrasil => {
+                // `bitcoin::p2p::address::AddrV2` has no Yggdrasil variant; preserve the
+                // network ID via the generic `Unknown` encoding.
+                AddrV2::Unknown(AddrNetwork::Yggdrasil.id(), payload.clone())
+            }
+            AddrNetwork::Unknown(id) => AddrV2::Unknown(id, payload.clone()),
+        };
+
+        Ok(AddrV2Message {
+            time,
+            services,
+            addr,
+            port,
+        })
+    }
+
+    fn service_flags_from_bits(&self, bits: u64) -> ServiceFlags {
+        let mut flags = ServiceFlags::NONE;
+        for candidate in [
+            ServiceFlags::NETWORK,
+            ServiceFlags::GETUTXO,
+            ServiceFlags::BLOOM,
+            ServiceFlags::WITNESS,
+            ServiceFlags::COMPACT_FILTERS,
+            ServiceFlags::NETWORK_LIMITED,
+            ServiceFlags::P2P_V2,
+        ] {
+            if bits & candidate.to_u64() != 0 {
+                flags.add(candidate);
+            }
+        }
+        flags
     }
 
     fn handle_witness_operations(
@@ -790,6 +981,22 @@ impl Compiler {
                     bitcoin::consensus::encode::serialize(&inv_var),
                 );
             }
+            Operation::SendGetAddr => {
+                let connection_var = self.get_input::<usize>(&instruction.inputs, 0)?;
+                self.emit_send_raw_message(*connection_var, "getaddr", vec![]);
+            }
+            Operation::SendAddr => {
+                let connection_var = self.get_input::<usize>(&instruction.inputs, 0)?;
+                let addr_var = self.get_input::<Vec<(u32, Address)>>(&instruction.inputs, 1)?;
+                let payload = bitcoin::consensus::encode::serialize(addr_var);
+                self.emit_send_raw_message(*connection_var, "addr", payload);
+            }
+            Operation::SendAddrV2 => {
+                let connection_var = self.get_input::<usize>(&instruction.inputs, 0)?;
+                let addr_var = self.get_input::<Vec<AddrV2Message>>(&instruction.inputs, 1)?;
+                let payload = bitcoin::consensus::encode::serialize(addr_var);
+                self.emit_send_raw_message(*connection_var, "addrv2", payload);
+            }
             Operation::SendHeader => {
                 let connection_var = self.get_input::<usize>(&instruction.inputs, 0)?;
                 let header_var = self.get_input::<Header>(&instruction.inputs, 1)?;
@@ -916,6 +1123,7 @@ impl Compiler {
                 self.handle_load_operation(connection_type.clone())
             }
             Operation::LoadDuration(duration) => self.handle_load_operation(*duration),
+            Operation::LoadAddr(addr) => self.handle_load_operation(addr.clone()),
             Operation::LoadAmount(amount) => self.handle_load_operation(*amount),
             Operation::LoadTxVersion(version) => self.handle_load_operation(*version),
             Operation::LoadBlockVersion(version) => self.handle_load_operation(*version),
@@ -1318,5 +1526,166 @@ impl Compiler {
         self.append_variable(tx_var);
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{ProgramBuilder, ProgramContext};
+
+    #[test]
+    fn compile_send_getaddr_emits_getaddr_message() {
+        let context = ProgramContext {
+            num_nodes: 1,
+            num_connections: 1,
+            timestamp: 0,
+        };
+
+        let mut builder = ProgramBuilder::new(context.clone());
+        let conn_var = builder.force_append_expect_output(vec![], Operation::LoadConnection(0));
+        builder.force_append(vec![conn_var.index], Operation::SendGetAddr);
+
+        let program = builder.finalize().unwrap();
+
+        let mut compiler = Compiler::new();
+        let compiled = compiler
+            .compile(&program)
+            .expect("failed to compile program");
+
+        assert_eq!(compiled.actions.len(), 1);
+        match &compiled.actions[0] {
+            CompiledAction::SendRawMessage(conn, command, payload) => {
+                assert_eq!(*conn, 0);
+                assert_eq!(command, "getaddr");
+                assert!(payload.is_empty());
+            }
+            other => panic!("unexpected action {:?}", other),
+        }
+    }
+
+    #[test]
+    fn compile_send_addr_emits_addr_message() {
+        let context = ProgramContext {
+            num_nodes: 1,
+            num_connections: 1,
+            timestamp: 0,
+        };
+
+        let mut builder = ProgramBuilder::new(context.clone());
+
+        let conn_var = builder.force_append_expect_output(vec![], Operation::LoadConnection(0));
+        let mut_list = builder.force_append_expect_output(vec![], Operation::BeginBuildAddrList);
+
+        let addr = AddrRecord::V1 {
+            time: 42,
+            services: (ServiceFlags::NETWORK | ServiceFlags::WITNESS).to_u64(),
+            ip: [0u8; 16],
+            port: 8333,
+        };
+
+        let addr_var =
+            builder.force_append_expect_output(vec![], Operation::LoadAddr(addr.clone()));
+        builder.force_append(vec![mut_list.index, addr_var.index], Operation::AddAddr);
+        let addr_list =
+            builder.force_append_expect_output(vec![mut_list.index], Operation::EndBuildAddrList);
+        builder.force_append(vec![conn_var.index, addr_list.index], Operation::SendAddr);
+
+        let program = builder.finalize().unwrap();
+
+        let mut compiler = Compiler::new();
+        let compiled = compiler
+            .compile(&program)
+            .expect("failed to compile program");
+
+        assert_eq!(compiled.actions.len(), 1);
+        match &compiled.actions[0] {
+            CompiledAction::SendRawMessage(conn, command, payload) => {
+                assert_eq!(*conn, 0);
+                assert_eq!(command, "addr");
+
+                let (time, services, ip, port) = match addr {
+                    AddrRecord::V1 {
+                        time,
+                        services,
+                        ip,
+                        port,
+                    } => (time, services, ip, port),
+                    _ => unreachable!(),
+                };
+
+                let compiled_address = {
+                    let ipv6 = Ipv6Addr::from(ip);
+                    let socket = if let Some(ipv4) = ipv6.to_ipv4() {
+                        SocketAddr::V4(SocketAddrV4::new(ipv4, port))
+                    } else {
+                        SocketAddr::V6(SocketAddrV6::new(ipv6, port, 0, 0))
+                    };
+                    let services_flags = compiler.service_flags_from_bits(services);
+                    (time, Address::new(&socket, services_flags))
+                };
+
+                let expected_bytes = bitcoin::consensus::encode::serialize(&vec![compiled_address]);
+                assert_eq!(*payload, expected_bytes);
+            }
+            other => panic!("unexpected action {:?}", other),
+        }
+    }
+
+    #[test]
+    fn compile_send_addr_v2_emits_addrv2_message() {
+        let context = ProgramContext {
+            num_nodes: 1,
+            num_connections: 1,
+            timestamp: 0,
+        };
+
+        let mut builder = ProgramBuilder::new(context.clone());
+
+        let conn_var = builder.force_append_expect_output(vec![], Operation::LoadConnection(0));
+        let mut_list = builder.force_append_expect_output(vec![], Operation::BeginBuildAddrListV2);
+
+        let addr = AddrRecord::V2 {
+            time: 4242,
+            services: (ServiceFlags::NETWORK | ServiceFlags::P2P_V2).to_u64(),
+            network: AddrNetwork::IPv4,
+            payload: vec![192, 0, 2, 1],
+            port: 8333,
+        };
+
+        let addr_var =
+            builder.force_append_expect_output(vec![], Operation::LoadAddr(addr.clone()));
+        builder.force_append(vec![mut_list.index, addr_var.index], Operation::AddAddrV2);
+        let addr_list =
+            builder.force_append_expect_output(vec![mut_list.index], Operation::EndBuildAddrListV2);
+        builder.force_append(vec![conn_var.index, addr_list.index], Operation::SendAddrV2);
+
+        let program = builder.finalize().unwrap();
+
+        let mut compiler = Compiler::new();
+        let compiled = compiler
+            .compile(&program)
+            .expect("failed to compile program");
+
+        assert_eq!(compiled.actions.len(), 1);
+        match &compiled.actions[0] {
+            CompiledAction::SendRawMessage(conn, command, payload) => {
+                assert_eq!(*conn, 0);
+                assert_eq!(command, "addrv2");
+
+                let expected_message = AddrV2Message {
+                    time: 4242,
+                    services: compiler.service_flags_from_bits(
+                        (ServiceFlags::NETWORK | ServiceFlags::P2P_V2).to_u64(),
+                    ),
+                    addr: AddrV2::Ipv4(Ipv4Addr::new(192, 0, 2, 1)),
+                    port: 8333,
+                };
+
+                let expected_bytes = bitcoin::consensus::encode::serialize(&vec![expected_message]);
+                assert_eq!(*payload, expected_bytes);
+            }
+            other => panic!("unexpected action {:?}", other),
+        }
     }
 }

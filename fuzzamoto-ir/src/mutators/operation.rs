@@ -1,7 +1,13 @@
 use std::{time::Duration, u64};
 
 use super::{Mutator, MutatorResult};
-use crate::{Operation, Program};
+use crate::{
+    AddrNetwork, AddrRecord, Operation, Program,
+    generators::address::{
+        MAX_UNKNOWN_ADDR_PAYLOAD, ipv4_to_ipv6_mapped, random_addr_network, random_global_ipv6,
+        random_payload_for_network, random_port, random_public_ipv4, random_services, random_time,
+    },
+};
 use bitcoin::{NetworkKind, PrivateKey};
 
 use rand::{
@@ -279,6 +285,11 @@ impl<R: RngCore, M: OperationByteMutator> Mutator<R> for OperationMutator<M> {
                     .unwrap(),
                 )
             }
+            Operation::LoadAddr(current) => Operation::LoadAddr(mutate_addr_record(
+                current,
+                rng,
+                &mut self.byte_array_mutator,
+            )),
             Operation::LoadBytes(bytes) => {
                 self.byte_array_mutator.mutate_bytes(bytes);
                 Operation::LoadBytes(bytes.clone()) // TODO this clone is not needed
@@ -297,5 +308,145 @@ impl<R: RngCore, M: OperationByteMutator> Mutator<R> for OperationMutator<M> {
 impl<M: OperationByteMutator> OperationMutator<M> {
     pub fn new(byte_array_mutator: M) -> Self {
         Self { byte_array_mutator }
+    }
+}
+
+fn mutate_addr_record<R: RngCore, M: OperationByteMutator>(
+    record: &AddrRecord,
+    rng: &mut R,
+    byte_mutator: &mut M,
+) -> AddrRecord {
+    match record {
+        AddrRecord::V1 {
+            time,
+            services,
+            ip,
+            port,
+        } => {
+            let time = if rng.gen_bool(0.5) {
+                random_time(rng, *time)
+            } else {
+                *time
+            };
+            let services = if rng.gen_bool(0.5) {
+                random_services(rng, false)
+            } else {
+                *services
+            };
+            let ip = if rng.gen_bool(0.5) {
+                if rng.gen_bool(0.6) {
+                    ipv4_to_ipv6_mapped(random_public_ipv4(rng))
+                } else {
+                    random_global_ipv6(rng)
+                }
+            } else {
+                *ip
+            };
+            let port = if rng.gen_bool(0.5) {
+                random_port(rng, Some(*port))
+            } else {
+                *port
+            };
+
+            AddrRecord::V1 {
+                time,
+                services,
+                ip,
+                port,
+            }
+        }
+        AddrRecord::V2 {
+            time,
+            services,
+            network,
+            payload,
+            port,
+        } => {
+            let original_network = network.clone();
+            let mut chosen_network = if rng.gen_bool(0.4) {
+                random_addr_network(rng)
+            } else {
+                original_network.clone()
+            };
+            if matches!(chosen_network, AddrNetwork::TorV2) {
+                chosen_network = AddrNetwork::TorV3;
+            }
+
+            let time = if rng.gen_bool(0.5) {
+                random_time(rng, *time)
+            } else {
+                *time
+            };
+            let services = if rng.gen_bool(0.5) {
+                random_services(
+                    rng,
+                    matches!(chosen_network, AddrNetwork::IPv4 | AddrNetwork::IPv6),
+                )
+            } else {
+                *services
+            };
+            let port = if rng.gen_bool(0.5) {
+                random_port(rng, Some(*port))
+            } else {
+                *port
+            };
+
+            let mut new_payload = if rng.gen_bool(0.4) && chosen_network == original_network {
+                payload.clone()
+            } else {
+                random_payload_for_network(rng, &chosen_network)
+            };
+            mutate_addr_payload(&chosen_network, &mut new_payload, rng, byte_mutator);
+
+            AddrRecord::V2 {
+                time,
+                services,
+                network: chosen_network,
+                payload: new_payload,
+                port,
+            }
+        }
+    }
+}
+
+/// Adjust the payload while keeping it valid for the target network.
+fn mutate_addr_payload<R: RngCore, M: OperationByteMutator>(
+    network: &AddrNetwork,
+    payload: &mut Vec<u8>,
+    rng: &mut R,
+    byte_mutator: &mut M,
+) {
+    if payload.is_empty() {
+        match network.expected_payload_len() {
+            Some(expected) => {
+                payload.resize(expected, 0);
+                rng.fill_bytes(payload.as_mut_slice());
+            }
+            None => {
+                let len = rng.gen_range(1..=MAX_UNKNOWN_ADDR_PAYLOAD);
+                payload.resize(len, 0);
+                rng.fill_bytes(payload.as_mut_slice());
+            }
+        }
+    }
+
+    byte_mutator.mutate_bytes(payload);
+
+    match network.expected_payload_len() {
+        Some(expected) => {
+            if payload.len() < expected {
+                payload.resize(expected, 0);
+            } else if payload.len() > expected {
+                payload.truncate(expected);
+            }
+        }
+        None => {
+            if payload.is_empty() {
+                payload.push(0);
+            }
+            if payload.len() > MAX_UNKNOWN_ADDR_PAYLOAD {
+                payload.truncate(MAX_UNKNOWN_ADDR_PAYLOAD);
+            }
+        }
     }
 }

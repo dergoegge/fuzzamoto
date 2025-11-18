@@ -1,17 +1,21 @@
+pub mod address;
 pub mod advance_time;
 pub mod block;
 pub mod bloom_filter;
 pub mod compact_filters;
+pub mod getaddr;
 pub mod getdata;
 pub mod send_raw_message;
 pub mod tx;
 pub mod txo;
 pub mod witness;
 
+pub use address::*;
 pub use advance_time::*;
 pub use block::*;
 pub use bloom_filter::*;
 pub use compact_filters::*;
+pub use getaddr::*;
 pub use getdata::*;
 pub use send_raw_message::*;
 pub use tx::*;

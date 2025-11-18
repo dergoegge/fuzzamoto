@@ -181,6 +181,10 @@ impl<T: Transport> Connection<T> {
         self.transport.receive()
     }
 
+    pub fn local_addr(&self) -> Result<net::SocketAddr, String> {
+        self.transport.local_addr()
+    }
+
     pub fn ping(&mut self) -> Result<(), String> {
         self.ping_counter += 1;
         self.send_ping(self.ping_counter)?;

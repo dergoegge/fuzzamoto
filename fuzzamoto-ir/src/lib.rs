@@ -61,6 +61,92 @@ pub struct FullProgramContext {
     pub headers: Vec<Header>,
 }
 
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
+pub enum AddrNetwork {
+    IPv4,
+    IPv6,
+    TorV2,
+    TorV3,
+    I2p,
+    Cjdns,
+    Yggdrasil,
+    Unknown(u8),
+}
+
+impl AddrNetwork {
+    pub fn id(&self) -> u8 {
+        match self {
+            AddrNetwork::IPv4 => 0x01,
+            AddrNetwork::IPv6 => 0x02,
+            AddrNetwork::TorV2 => 0x03,
+            AddrNetwork::TorV3 => 0x04,
+            AddrNetwork::I2p => 0x05,
+            AddrNetwork::Cjdns => 0x06,
+            AddrNetwork::Yggdrasil => 0x07,
+            AddrNetwork::Unknown(id) => *id,
+        }
+    }
+
+    pub fn expected_payload_len(&self) -> Option<usize> {
+        match self {
+            AddrNetwork::IPv4 => Some(4),
+            AddrNetwork::IPv6 => Some(16),
+            AddrNetwork::TorV2 => Some(10),
+            AddrNetwork::TorV3 => Some(32),
+            AddrNetwork::I2p => Some(32),
+            AddrNetwork::Cjdns => Some(16),
+            AddrNetwork::Yggdrasil => Some(16),
+            AddrNetwork::Unknown(_) => None,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn from_id(id: u8) -> Self {
+        match id {
+            0x01 => AddrNetwork::IPv4,
+            0x02 => AddrNetwork::IPv6,
+            0x03 => AddrNetwork::TorV2,
+            0x04 => AddrNetwork::TorV3,
+            0x05 => AddrNetwork::I2p,
+            0x06 => AddrNetwork::Cjdns,
+            0x07 => AddrNetwork::Yggdrasil,
+            other => AddrNetwork::Unknown(other),
+        }
+    }
+}
+
+impl fmt::Display for AddrNetwork {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            AddrNetwork::IPv4 => write!(f, "ipv4"),
+            AddrNetwork::IPv6 => write!(f, "ipv6"),
+            AddrNetwork::TorV2 => write!(f, "torv2"),
+            AddrNetwork::TorV3 => write!(f, "torv3"),
+            AddrNetwork::I2p => write!(f, "i2p"),
+            AddrNetwork::Cjdns => write!(f, "cjdns"),
+            AddrNetwork::Yggdrasil => write!(f, "yggdrasil"),
+            AddrNetwork::Unknown(id) => write!(f, "unknown({:#04x})", id),
+        }
+    }
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
+pub enum AddrRecord {
+    V1 {
+        time: u32,
+        services: u64,
+        ip: [u8; 16],
+        port: u16,
+    },
+    V2 {
+        time: u32,
+        services: u64,
+        network: AddrNetwork,
+        payload: Vec<u8>,
+        port: u16,
+    },
+}
+
 impl Program {
     pub fn unchecked_new(context: ProgramContext, instructions: Vec<Instruction>) -> Self {
         Self {
