@@ -482,7 +482,6 @@ impl Operation {
             | Operation::SendFilterLoad
             | Operation::SendFilterAdd
             | Operation::SendFilterClear
-            | Operation::SendBlockNoWit
             | Operation::EndBuildCoinbaseTx
             | Operation::EndBuildCoinbaseTxOutputs
             | Operation::BuildCoinbaseTxInput
@@ -748,7 +747,6 @@ impl Operation {
             Operation::EndWitnessStack => vec![Variable::ConstWitnessStack],
             Operation::AddWitness => vec![],
 
-            Operation::BuildBlock => vec![Variable::Header, Variable::Block, Variable::ConstTx],
             Operation::TaprootTxoToSpendInfo => vec![Variable::TaprootSpendInfo],
             Operation::TaprootTxoToKeypair => vec![Variable::TaprootKeypair],
             Operation::TaprootTxoToTxo => vec![Variable::Txo],
@@ -763,10 +761,10 @@ impl Operation {
             Operation::EndTaprootTree => vec![Variable::TaprootSpendInfo],
             Operation::LoadTaprootLeafVersion(_) => vec![Variable::TaprootLeafVersion],
 
-            Operation::BuildBlock => vec![Variable::Header, Variable::Block],
+            Operation::BeginBlockTransactions => vec![],
             Operation::AddTx => vec![],
             Operation::EndBlockTransactions => vec![Variable::ConstBlockTransactions],
-            Operation::BeginBlockTransactions => vec![],
+            Operation::BuildBlock => vec![Variable::Header, Variable::Block],
 
             Operation::SendTx => vec![],
             Operation::SendTxNoWit => vec![],
