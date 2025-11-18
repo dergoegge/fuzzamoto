@@ -6,8 +6,9 @@ use fuzzamoto_ir::{
     CompactFilterQueryGenerator, GetDataGenerator, HeaderGenerator, InputMutator,
     InventoryGenerator, LargeTxGenerator, LongChainGenerator, OneParentOneChildGenerator,
     OperationMutator, Program, SendBlockGenerator, SendMessageGenerator, SingleTxGenerator,
-    TxoGenerator, WitnessGenerator, cutting::CuttingMinimizer, instr_block::InstrBlockMinimizer,
-    nopping::NoppingMinimizer,
+    TaprootKeyPathGenerator, TaprootLeafSelectMutator, TaprootScriptMutator,
+    TaprootScriptPathGenerator, TaprootTreeSpendGenerator, TxoGenerator, WitnessGenerator,
+    cutting::CuttingMinimizer, instr_block::InstrBlockMinimizer, nopping::NoppingMinimizer,
 };
 
 use libafl::{
@@ -261,6 +262,14 @@ where
         let (mutations, weights) = weighted_mutations![
             (2000.0, IrMutator::new(InputMutator::new(), rng.clone())),
             (
+                50.0,
+                IrMutator::new(TaprootLeafSelectMutator::new(), rng.clone())
+            ),
+            (
+                50.0,
+                IrMutator::new(TaprootScriptMutator::new(), rng.clone())
+            ),
+            (
                 1000.0,
                 IrMutator::new(OperationMutator::new(LibAflByteMutator::new()), rng.clone())
             ),
@@ -296,6 +305,27 @@ where
                 20.0,
                 IrGenerator::new(
                     TxoGenerator::new(full_program_context.txos.clone()),
+                    rng.clone()
+                )
+            ),
+            (
+                20.0,
+                IrGenerator::new(
+                    TaprootKeyPathGenerator::new(full_program_context.taproot.txos.clone()),
+                    rng.clone()
+                )
+            ),
+            (
+                20.0,
+                IrGenerator::new(
+                    TaprootScriptPathGenerator::new(full_program_context.taproot.txos.clone()),
+                    rng.clone()
+                )
+            ),
+            (
+                20.0,
+                IrGenerator::new(
+                    TaprootTreeSpendGenerator::new(full_program_context.taproot.txos.clone()),
                     rng.clone()
                 )
             ),

@@ -2,6 +2,7 @@ pub mod combine;
 pub mod concat;
 pub mod input;
 pub mod operation;
+pub mod taproot;
 
 use crate::Program;
 pub use combine::*;
@@ -9,6 +10,7 @@ pub use concat::*;
 pub use input::*;
 pub use operation::*;
 use rand::RngCore;
+pub use taproot::{TaprootLeafSelectMutator, TaprootScriptMutator};
 
 #[derive(Debug)]
 pub enum MutatorError {

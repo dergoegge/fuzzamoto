@@ -18,6 +18,7 @@ pub use minimizers::*;
 pub use mutators::*;
 pub use operation::*;
 
+pub use fuzzamoto::taproot::*;
 use rand::{RngCore, seq::IteratorRandom};
 pub use variable::*;
 
@@ -59,6 +60,9 @@ pub struct FullProgramContext {
     pub txos: Vec<Txo>,
     /// List of headers present in the snapshotted state
     pub headers: Vec<Header>,
+    /// Taproot-specific data (UTXOs, scripts, keys) available to generators.
+    #[serde(default)]
+    pub taproot: TaprootContext,
 }
 
 impl Program {
