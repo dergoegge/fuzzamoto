@@ -360,7 +360,7 @@ fn random_leaf_version<R: RngCore>(rng: &mut R) -> (u8, bool) {
 }
 
 fn pick_strict_non_default_version<R: RngCore>(rng: &mut R) -> u8 {
-    *[0xC0u8, 0xC2, 0xC4, 0xD0].choose(rng).unwrap()
+    *[0xC2u8, 0xC4, 0xC6, 0xD0].choose(rng).unwrap()
 }
 
 /// Emit lightweight tapscripts so we mix success, CHECKSIG, and OP_TRUE leaves.
