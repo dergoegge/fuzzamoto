@@ -175,8 +175,7 @@ impl Instruction {
             | Operation::EndBuildCoinbaseTx
             | Operation::BeginBuildCoinbaseTxOutputs
             | Operation::EndBuildCoinbaseTxOutputs => false,
-            | Operation::BeginTaprootTree
-            | Operation::EndTaprootTree => false,
+            Operation::BeginTaprootTree | Operation::EndTaprootTree => false,
         }
     }
 

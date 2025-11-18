@@ -407,7 +407,7 @@ impl Operation {
             | Operation::BeginBuildFilterLoad
             | Operation::BeginBuildCoinbaseTx
             | Operation::BeginBuildCoinbaseTxOutputs => true,
-            | Operation::BeginTaprootTree => true,
+            Operation::BeginTaprootTree => true,
             // Exhaustive match to fail when new ops are added
             Operation::Nop { .. }
             | Operation::LoadBytes(_)
@@ -487,7 +487,7 @@ impl Operation {
             | Operation::EndBuildCoinbaseTxOutputs
             | Operation::BuildCoinbaseTxInput
             | Operation::AddCoinbaseTxOutput => false,
-            | Operation::TaprootTxoToSpendInfo
+            Operation::TaprootTxoToSpendInfo
             | Operation::TaprootTxoToKeypair
             | Operation::TaprootTxoToTxo
             | Operation::TaprootSpendInfoSelectLeaf { .. }
@@ -522,7 +522,7 @@ impl Operation {
             | (Operation::BeginBuildCoinbaseTxOutputs, Operation::EndBuildCoinbaseTxOutputs) => {
                 true
             }
-            | (Operation::BeginTaprootTree, Operation::EndTaprootTree) => true,
+            (Operation::BeginTaprootTree, Operation::EndTaprootTree) => true,
             _ => false,
         }
     }
@@ -538,7 +538,7 @@ impl Operation {
             | Operation::EndBuildFilterLoad
             | Operation::EndBuildCoinbaseTx
             | Operation::EndBuildCoinbaseTxOutputs => true,
-            | Operation::EndTaprootTree => true,
+            Operation::EndTaprootTree => true,
             // Exhaustive match to fail when new ops are added
             Operation::Nop { .. }
             | Operation::LoadBytes(_)
