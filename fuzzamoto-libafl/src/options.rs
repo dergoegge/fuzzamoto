@@ -109,6 +109,13 @@ pub struct FuzzerOptions {
 
     #[arg(short = 'm', long, help = "An input to minimize")]
     pub minimize_input: Option<PathBuf>,
+
+    #[arg(
+        long,
+        value_delimiter = ',',
+        help = "Comma-separated list of mutators/generators to enable (if not specified, all are enabled)"
+    )]
+    pub mutators: Option<Vec<String>>,
 }
 
 impl FuzzerOptions {
@@ -149,5 +156,19 @@ impl FuzzerOptions {
         let mut dir = self.output_dir(core_id).clone();
         dir.push("crashes");
         dir
+    }
+
+    /// Returns the weight for a mutator/generator, or 0.0 if it's disabled
+    pub fn mutator_weight(&self, name: &str, weight: f32) -> f32 {
+        match &self.mutators {
+            None => weight, // Default: all enabled with original weight
+            Some(list) => {
+                if list.iter().any(|m| m == name) {
+                    weight
+                } else {
+                    0.0
+                }
+            }
+        }
     }
 }
