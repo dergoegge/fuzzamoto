@@ -1,5 +1,4 @@
 use std::{
-    collections::HashSet,
     fs::OpenOptions,
     io::Write,
     marker::PhantomData,
@@ -13,7 +12,7 @@ use libafl::{
     executors::{Executor, HasObservers},
     observers::{CanTrack, MapObserver, ObserversTuple},
     stages::{Restartable, Stage},
-    state::{HasCorpus, HasCurrentTestcase},
+    state::{HasCorpus, HasCurrentTestcase, HasExecutions, HasSolutions},
 };
 use libafl_bolts::tuples::Handle;
 
@@ -23,11 +22,11 @@ use crate::input::IrInput;
 pub struct BenchStatsStage<T, O> {
     trace_handle: Handle<T>,
 
-    last_coverage: HashSet<usize>,
-
     initialised: Instant,
     last_update: Instant,
     update_interval: Duration,
+
+    last_execs: u64,
 
     stats_file_path: PathBuf,
     csv_header_written: bool,
@@ -44,10 +43,10 @@ impl<T, O> BenchStatsStage<T, O> {
         let last_update = Instant::now() - 2 * update_interval;
         Self {
             trace_handle,
-            last_coverage: HashSet::new(),
             initialised: Instant::now(),
             last_update,
             update_interval,
+            last_execs: 0,
             stats_file_path,
             csv_header_written: false,
             _phantom: PhantomData::default(),
@@ -67,7 +66,11 @@ impl<T, O, S> Restartable<S> for BenchStatsStage<T, O> {
 
 impl<E, EM, S, Z, OT, T, O> Stage<E, EM, S, Z> for BenchStatsStage<T, O>
 where
-    S: HasCorpus<IrInput> + HasCurrentTestcase<IrInput> + HasMetadata,
+    S: HasCorpus<IrInput>
+        + HasCurrentTestcase<IrInput>
+        + HasMetadata
+        + HasExecutions
+        + HasSolutions<IrInput>,
     E: Executor<EM, IrInput, S, Z> + HasObservers<Observers = OT>,
     EM: EventFirer<IrInput, S>,
     Z: Evaluator<E, EM, IrInput, S> + ExecutesInput<E, EM, IrInput, S>,
@@ -93,43 +96,51 @@ where
         let map_observer = observers[&self.trace_handle].as_ref();
         let initial_entry_value = map_observer.initial();
 
-        let mut new_coverage = Vec::new();
-        for i in 0..map_observer.len() {
-            if map_observer.get(i) != initial_entry_value {
-                if self.last_coverage.insert(i) {
-                    new_coverage.push(i);
-                }
-            }
+        let covered = (0..map_observer.len())
+            .filter(|idx| map_observer.get(*idx) != initial_entry_value)
+            .count();
+        let coverage_pct = if map_observer.len() == 0 {
+            0.0
+        } else {
+            (covered as f64 / map_observer.len() as f64) * 100.0
+        };
+
+        let elapsed = now.duration_since(self.initialised).as_secs_f64();
+        let delta_secs = (now - self.last_update).as_secs_f64();
+
+        let total_execs = *state.executions();
+        let execs_per_sec = if delta_secs > 0.0 {
+            (total_execs.saturating_sub(self.last_execs) as f64) / delta_secs
+        } else {
+            0.0
+        };
+        self.last_execs = total_execs;
+
+        let corpus_size = state.corpus().count();
+        let crashes = state.solutions().count();
+
+        let _ = std::fs::create_dir_all(self.stats_file_path.parent().unwrap());
+        let stats_file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.stats_file_path)
+            .map_err(|e| libafl::Error::unknown(format!("Failed to open stats file: {}", e)))?;
+
+        if !self.csv_header_written {
+            writeln!(
+                &stats_file,
+                "elapsed_s,execs,execs_per_sec,coverage_pct,corpus_size,crashes"
+            )
+            .map_err(|e| libafl::Error::unknown(format!("Failed to write CSV header: {}", e)))?;
+            self.csv_header_written = true;
         }
 
-        // Write the new coverage indices to the stats file as CSV
-        if !new_coverage.is_empty() {
-            // We need to store the path temporarily since we can't borrow self while calling ensure_file_open
-            let _ = std::fs::create_dir_all(self.stats_file_path.parent().unwrap());
-            let stats_file = OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&self.stats_file_path)
-                .map_err(|e| libafl::Error::unknown(format!("Failed to open stats file: {}", e)))?;
-
-            // Write CSV header if this is the first time
-            if !self.csv_header_written {
-                writeln!(&stats_file, "timestamp,new_coverage_indices").map_err(|e| {
-                    libafl::Error::unknown(format!("Failed to write CSV header: {}", e))
-                })?;
-                self.csv_header_written = true;
-            }
-
-            // Write new coverage data
-            let timestamp = now.duration_since(self.initialised).as_secs();
-            let coverage_str = new_coverage
-                .iter()
-                .map(|i| i.to_string())
-                .collect::<Vec<_>>()
-                .join(";");
-            writeln!(&stats_file, "{},{}", timestamp, coverage_str)
-                .map_err(|e| libafl::Error::unknown(format!("Failed to write CSV data: {}", e)))?;
-        }
+        writeln!(
+            &stats_file,
+            "{:.3},{},{:.2},{:.4},{},{}",
+            elapsed, total_execs, execs_per_sec, coverage_pct, corpus_size, crashes
+        )
+        .map_err(|e| libafl::Error::unknown(format!("Failed to write CSV data: {}", e)))?;
 
         Ok(())
     }
