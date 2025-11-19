@@ -58,7 +58,9 @@ impl<R: RngCore> Splicer<R> for CombineMutator {
                 builder.variable_count() - prev_var_count,
             )
             .map_err(|_| MutatorError::CreatedInvalidProgram)?;
-
+        *program = builder
+            .finalize()
+            .map_err(|_| MutatorError::CreatedInvalidProgram)?;
         Ok(())
     }
 }
