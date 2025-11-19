@@ -3,6 +3,7 @@ mod error;
 mod utils;
 
 use clap::{Parser, Subcommand};
+use commands::benchmark;
 use commands::*;
 use error::Result;
 use std::path::PathBuf;
@@ -63,6 +64,12 @@ enum Commands {
         scenario: PathBuf,
     },
 
+    /// Benchmark helper commands
+    Benchmark {
+        #[command(subcommand)]
+        command: benchmark::BenchmarkCommands,
+    },
+
     /// Fuzzamoto intermediate representation (IR) commands
     IR {
         #[command(subcommand)]
@@ -106,5 +113,6 @@ fn main() -> Result<()> {
             scenario.clone(),
         ),
         Commands::IR { command } => IrCommand::execute(command),
+        Commands::Benchmark { command } => BenchmarkCommand::execute(command),
     }
 }
