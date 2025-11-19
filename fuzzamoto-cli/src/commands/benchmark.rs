@@ -8,7 +8,7 @@ use std::{
 };
 
 use clap::Subcommand;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::error::{CliError, Result};
 
@@ -140,6 +140,8 @@ fn run_single(config: &BenchmarkConfig, run_idx: usize, root: &Path) -> Result<(
         thread::sleep(Duration::from_secs(1));
     }
 
+    aggregate_bench_stats(&run_dir)?;
+
     Ok(())
 }
 
@@ -160,4 +162,148 @@ fn copy_dir(src: &Path, dst: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn aggregate_bench_stats(run_dir: &Path) -> Result<()> {
+    let bench_dir = run_dir.join("out").join("bench");
+    if !bench_dir.exists() {
+        log::warn!(
+            "bench directory missing for {}, skipping aggregation",
+            run_dir.display()
+        );
+        return Ok(());
+    }
+
+    let mut merged: Vec<(String, BenchSample)> = Vec::new();
+    let mut summary = BenchSummary::default();
+
+    for entry in fs::read_dir(&bench_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.extension().is_some_and(|ext| ext == "csv") {
+            continue;
+        }
+        let cpu = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("bench")
+            .to_string();
+        let samples = parse_bench_file(&path)?;
+        if samples.is_empty() {
+            continue;
+        }
+        for sample in &samples {
+            merged.push((cpu.clone(), sample.clone()));
+        }
+        if let Some(last) = samples.last() {
+            summary.final_elapsed_s = summary.final_elapsed_s.max(last.elapsed_s);
+            summary.total_execs += last.execs;
+            summary.max_coverage_pct = summary.max_coverage_pct.max(last.coverage_pct);
+            summary.final_corpus_size += last.corpus_size;
+            summary.total_crashes += last.crashes;
+        }
+        if summary.time_to_first_crash_s.is_none() {
+            if let Some(first_crash) = samples.iter().find(|s| s.crashes > 0) {
+                summary.time_to_first_crash_s = Some(first_crash.elapsed_s);
+            }
+        }
+    }
+
+    if merged.is_empty() {
+        log::warn!(
+            "no bench CSV files found under {}, skipping aggregation",
+            bench_dir.display()
+        );
+        return Ok(());
+    }
+
+    merged.sort_by(|a, b| a.1.elapsed_s.partial_cmp(&b.1.elapsed_s).unwrap());
+
+    let mut stats_csv =
+        String::from("cpu,elapsed_s,execs,execs_per_sec,coverage_pct,corpus_size,crashes\n");
+    for (cpu, sample) in &merged {
+        stats_csv.push_str(&format!(
+            "{cpu},{:.3},{},{:.2},{:.4},{},{}\n",
+            sample.elapsed_s,
+            sample.execs,
+            sample.execs_per_sec,
+            sample.coverage_pct,
+            sample.corpus_size,
+            sample.crashes
+        ));
+    }
+    fs::write(run_dir.join("stats.csv"), stats_csv)?;
+
+    if summary.final_elapsed_s > 0.0 {
+        summary.mean_execs_per_sec = summary.total_execs as f64 / summary.final_elapsed_s.max(1e-9);
+    }
+
+    let summary_path = run_dir.join("summary.json");
+    fs::write(summary_path, serde_json::to_vec_pretty(&summary)?)?;
+
+    Ok(())
+}
+
+#[derive(Debug, Clone)]
+struct BenchSample {
+    elapsed_s: f64,
+    execs: u64,
+    execs_per_sec: f64,
+    coverage_pct: f64,
+    corpus_size: usize,
+    crashes: usize,
+}
+
+#[derive(Debug, Default, Serialize)]
+struct BenchSummary {
+    final_elapsed_s: f64,
+    total_execs: u64,
+    mean_execs_per_sec: f64,
+    max_coverage_pct: f64,
+    final_corpus_size: usize,
+    total_crashes: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    time_to_first_crash_s: Option<f64>,
+}
+
+fn parse_bench_file(path: &Path) -> Result<Vec<BenchSample>> {
+    let contents = fs::read_to_string(path)?;
+    let mut samples = Vec::new();
+    for (idx, line) in contents.lines().enumerate() {
+        if idx == 0 {
+            continue;
+        }
+        let parts: Vec<_> = line.split(',').collect();
+        if parts.len() < 6 {
+            continue;
+        }
+        let Ok(elapsed_s) = parts[0].parse() else {
+            continue;
+        };
+        let Ok(execs) = parts[1].parse() else {
+            continue;
+        };
+        let Ok(execs_per_sec) = parts[2].parse() else {
+            continue;
+        };
+        let Ok(coverage_pct) = parts[3].parse() else {
+            continue;
+        };
+        let Ok(corpus_size) = parts[4].parse() else {
+            continue;
+        };
+        let Ok(crashes) = parts[5].parse() else {
+            continue;
+        };
+
+        samples.push(BenchSample {
+            elapsed_s,
+            execs,
+            execs_per_sec,
+            coverage_pct,
+            corpus_size,
+            crashes,
+        });
+    }
+    Ok(samples)
 }
