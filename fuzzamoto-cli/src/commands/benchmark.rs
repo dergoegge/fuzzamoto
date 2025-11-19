@@ -141,6 +141,7 @@ fn run_single(config: &BenchmarkConfig, run_idx: usize, root: &Path) -> Result<(
     }
 
     aggregate_bench_stats(&run_dir)?;
+    write_run_report(&run_dir)?;
 
     Ok(())
 }
@@ -200,12 +201,6 @@ fn aggregate_bench_stats(run_dir: &Path) -> Result<()> {
             summary.total_execs += last.execs;
             summary.max_coverage_pct = summary.max_coverage_pct.max(last.coverage_pct);
             summary.final_corpus_size += last.corpus_size;
-            summary.total_crashes += last.crashes;
-        }
-        if summary.time_to_first_crash_s.is_none() {
-            if let Some(first_crash) = samples.iter().find(|s| s.crashes > 0) {
-                summary.time_to_first_crash_s = Some(first_crash.elapsed_s);
-            }
         }
     }
 
@@ -254,16 +249,13 @@ struct BenchSample {
     crashes: usize,
 }
 
-#[derive(Debug, Default, Serialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 struct BenchSummary {
     final_elapsed_s: f64,
     total_execs: u64,
     mean_execs_per_sec: f64,
     max_coverage_pct: f64,
     final_corpus_size: usize,
-    total_crashes: usize,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    time_to_first_crash_s: Option<f64>,
 }
 
 fn parse_bench_file(path: &Path) -> Result<Vec<BenchSample>> {
@@ -306,4 +298,34 @@ fn parse_bench_file(path: &Path) -> Result<Vec<BenchSample>> {
         });
     }
     Ok(samples)
+}
+
+fn write_run_report(run_dir: &Path) -> Result<()> {
+    let summary_path = run_dir.join("summary.json");
+    if !summary_path.exists() {
+        return Ok(());
+    }
+    let summary_bytes = fs::read(&summary_path)?;
+    let summary: BenchSummary =
+        serde_json::from_slice(&summary_bytes).map_err(|e| CliError::JsonError(e))?;
+
+    let stats_path = run_dir.join("stats.csv");
+    let mut report = String::new();
+    report.push_str(&format!("# Benchmark Report ({})\n\n", run_dir.display()));
+    report.push_str(&format!(
+        "- Final elapsed: {:.2}s\n- Total execs: {}\n- Mean exec/sec: {:.2}\n- Max coverage: {:.4}%\n- Final corpus size: {}\n",
+        summary.final_elapsed_s,
+        summary.total_execs,
+        summary.mean_execs_per_sec,
+        summary.max_coverage_pct,
+        summary.final_corpus_size
+    ));
+    report.push('\n');
+    report.push_str(&format!(
+        "[stats.csv]({}) | [summary.json]({})\n",
+        stats_path.display(),
+        summary_path.display()
+    ));
+    fs::write(run_dir.join("report.md"), report)?;
+    Ok(())
 }
