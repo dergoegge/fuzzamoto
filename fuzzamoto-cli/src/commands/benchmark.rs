@@ -1,4 +1,5 @@
 use std::{
+    ffi::OsStr,
     fs::{self, File},
     io::Read,
     path::{Path, PathBuf},
@@ -233,6 +234,8 @@ fn aggregate_bench_stats(run_dir: &Path) -> Result<()> {
         summary.mean_execs_per_sec = summary.total_execs as f64 / summary.final_elapsed_s.max(1e-9);
     }
 
+    compute_relcov_and_hist(run_dir, &mut summary)?;
+
     let summary_path = run_dir.join("summary.json");
     fs::write(summary_path, serde_json::to_vec_pretty(&summary)?)?;
 
@@ -256,6 +259,12 @@ struct BenchSummary {
     mean_execs_per_sec: f64,
     max_coverage_pct: f64,
     final_corpus_size: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    unique_edges: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    edge_histogram: Option<EdgeHistogram>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    per_cpu_relcov: Option<Vec<RelcovEntry>>,
 }
 
 fn parse_bench_file(path: &Path) -> Result<Vec<BenchSample>> {
@@ -300,6 +309,109 @@ fn parse_bench_file(path: &Path) -> Result<Vec<BenchSample>> {
     Ok(samples)
 }
 
+fn compute_relcov_and_hist(run_dir: &Path, summary: &mut BenchSummary) -> Result<()> {
+    let bench_dir = run_dir.join("out").join("bench");
+    if !bench_dir.exists() {
+        return Ok(());
+    }
+
+    let mut cpu_maps: Vec<(String, Vec<u8>)> = Vec::new();
+    for entry in fs::read_dir(&bench_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension() != Some(OsStr::new("bin")) {
+            continue;
+        }
+        let cpu = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default()
+            .to_string();
+        let data = fs::read(&path)?;
+        if data.is_empty() {
+            continue;
+        }
+        cpu_maps.push((cpu, data));
+    }
+
+    if cpu_maps.is_empty() {
+        return Ok(());
+    }
+
+    let map_len = cpu_maps[0].1.len();
+    if map_len == 0 {
+        return Ok(());
+    }
+    if cpu_maps.iter().any(|(_, map)| map.len() != map_len) {
+        log::warn!(
+            "coverage map sizes differ under {}, skipping relcov aggregation",
+            bench_dir.display()
+        );
+        return Ok(());
+    }
+
+    let mut union_map = vec![0u8; map_len];
+    for (_, map) in &cpu_maps {
+        for (idx, &byte) in map.iter().enumerate() {
+            if byte > union_map[idx] {
+                union_map[idx] = byte;
+            }
+        }
+    }
+
+    let mut histogram = EdgeHistogram::default();
+    for byte in &union_map {
+        match *byte {
+            0 => {}
+            1 => histogram.hit_1 += 1,
+            2 | 3 => histogram.hit_2_3 += 1,
+            _ => histogram.hit_ge_4 += 1,
+        }
+    }
+    let total_edges = histogram.total_edges();
+    summary.unique_edges = Some(total_edges);
+    summary.edge_histogram = Some(histogram);
+
+    let per_cpu: Vec<_> = cpu_maps
+        .into_iter()
+        .map(|(cpu, map)| {
+            let edges = map.iter().filter(|&&b| b > 0).count();
+            RelcovEntry {
+                cpu,
+                edges,
+                relcov_pct: if total_edges > 0 {
+                    (edges as f64 / total_edges as f64) * 100.0
+                } else {
+                    0.0
+                },
+            }
+        })
+        .collect();
+    summary.per_cpu_relcov = Some(per_cpu);
+
+    Ok(())
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct EdgeHistogram {
+    hit_1: usize,
+    hit_2_3: usize,
+    hit_ge_4: usize,
+}
+
+impl EdgeHistogram {
+    fn total_edges(&self) -> usize {
+        self.hit_1 + self.hit_2_3 + self.hit_ge_4
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct RelcovEntry {
+    cpu: String,
+    edges: usize,
+    relcov_pct: f64,
+}
+
 fn write_run_report(run_dir: &Path) -> Result<()> {
     let summary_path = run_dir.join("summary.json");
     if !summary_path.exists() {
@@ -320,6 +432,24 @@ fn write_run_report(run_dir: &Path) -> Result<()> {
         summary.max_coverage_pct,
         summary.final_corpus_size
     ));
+    if let Some(edges) = summary.unique_edges {
+        report.push_str(&format!("- Unique edges: {}\n", edges));
+    }
+    if let Some(hist) = &summary.edge_histogram {
+        report.push_str(&format!(
+            "- Edge histogram: 1-hit={} | 2-3 hits={} | >=4 hits={}\n",
+            hist.hit_1, hist.hit_2_3, hist.hit_ge_4
+        ));
+    }
+    if let Some(relcov) = &summary.per_cpu_relcov {
+        report.push_str("- Per-CPU coverage share:\n");
+        for entry in relcov {
+            report.push_str(&format!(
+                "  - {}: {} edges ({:.2}%)\n",
+                entry.cpu, entry.edges, entry.relcov_pct
+            ));
+        }
+    }
     report.push('\n');
     report.push_str(&format!(
         "[stats.csv]({}) | [summary.json]({})\n",

@@ -1,5 +1,5 @@
 use std::{
-    fs::OpenOptions,
+    fs::{File, OpenOptions},
     io::Write,
     marker::PhantomData,
     path::PathBuf,
@@ -29,6 +29,7 @@ pub struct BenchStatsStage<T, O> {
     last_execs: u64,
 
     stats_file_path: PathBuf,
+    coverage_file_path: PathBuf,
     csv_header_written: bool,
 
     _phantom: PhantomData<O>,
@@ -48,6 +49,7 @@ impl<T, O> BenchStatsStage<T, O> {
             update_interval,
             last_execs: 0,
             stats_file_path,
+            coverage_file_path: stats_file_path.with_extension("bin"),
             csv_header_written: false,
             _phantom: PhantomData::default(),
         }
@@ -75,7 +77,7 @@ where
     EM: EventFirer<IrInput, S>,
     Z: Evaluator<E, EM, IrInput, S> + ExecutesInput<E, EM, IrInput, S>,
     OT: ObserversTuple<IrInput, S>,
-    O: MapObserver,
+    O: MapObserver<Entry = u8>,
     T: CanTrack + AsRef<O>,
 {
     fn perform(
@@ -89,7 +91,7 @@ where
         if now < self.last_update + self.update_interval {
             return Ok(());
         }
-        // Only dump new stats every `self.update_interval`
+        let since_last = now - self.last_update;
         self.last_update = now;
 
         let observers = executor.observers();
@@ -106,7 +108,7 @@ where
         };
 
         let elapsed = now.duration_since(self.initialised).as_secs_f64();
-        let delta_secs = (now - self.last_update).as_secs_f64();
+        let delta_secs = since_last.as_secs_f64();
 
         let total_execs = *state.executions();
         let execs_per_sec = if delta_secs > 0.0 {
@@ -142,6 +144,20 @@ where
         )
         .map_err(|e| libafl::Error::unknown(format!("Failed to write CSV data: {}", e)))?;
 
+        dump_coverage_map(map_observer, &self.coverage_file_path)?;
+
         Ok(())
     }
+}
+
+fn dump_coverage_map<O: MapObserver<Entry = u8>>(
+    map_observer: &O,
+    path: &PathBuf,
+) -> Result<(), libafl::Error> {
+    let mut file = File::create(path)
+        .map_err(|e| libafl::Error::unknown(format!("Failed to open coverage file: {e}")))?;
+    let data = map_observer.to_vec();
+    file.write_all(&data)
+        .map_err(|e| libafl::Error::unknown(format!("Failed to write coverage file: {e}")))?;
+    Ok(())
 }
