@@ -7,6 +7,7 @@ use std::{
 };
 
 use libafl::{
+    corpus::Corpus,
     Evaluator, ExecutesInput, HasMetadata,
     events::EventFirer,
     executors::{Executor, HasObservers},
@@ -41,6 +42,7 @@ impl<T, O> BenchStatsStage<T, O> {
         update_interval: Duration,
         stats_file_path: PathBuf,
     ) -> Self {
+        let coverage_file_path = stats_file_path.with_extension("bin");
         let last_update = Instant::now() - 2 * update_interval;
         Self {
             trace_handle,
@@ -49,7 +51,7 @@ impl<T, O> BenchStatsStage<T, O> {
             update_interval,
             last_execs: 0,
             stats_file_path,
-            coverage_file_path: stats_file_path.with_extension("bin"),
+            coverage_file_path,
             csv_header_written: false,
             _phantom: PhantomData::default(),
         }
@@ -84,7 +86,7 @@ where
         &mut self,
         _fuzzer: &mut Z,
         executor: &mut E,
-        _state: &mut S,
+        state: &mut S,
         _manager: &mut EM,
     ) -> Result<(), libafl::Error> {
         let now = Instant::now();
