@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::{CliError, Result};
 
 const DEFAULT_FUZZER_PATH: &str = "target/release/fuzzamoto-libafl";
+const BENCH_SNAPSHOT_SECS: u64 = 30;
 
 pub struct BenchmarkCommand;
 
@@ -90,13 +91,18 @@ fn run_suite(suite: &PathBuf, output: &PathBuf) -> Result<()> {
 
     for run_idx in 0..config.runs {
         log::info!("Starting benchmark run {}/{}", run_idx + 1, config.runs);
-        run_single(&config, run_idx, output)?;
+        run_single(&config, run_idx, output, suite)?;
     }
 
     Ok(())
 }
 
-fn run_single(config: &BenchmarkConfig, run_idx: usize, root: &Path) -> Result<()> {
+fn run_single(
+    config: &BenchmarkConfig,
+    run_idx: usize,
+    root: &Path,
+    suite_path: &Path,
+) -> Result<()> {
     let run_dir = root.join(format!("run_{run_idx:02}"));
     if run_dir.exists() {
         fs::remove_dir_all(&run_dir)?;
@@ -156,7 +162,7 @@ fn run_single(config: &BenchmarkConfig, run_idx: usize, root: &Path) -> Result<(
         thread::sleep(Duration::from_secs(1));
     }
 
-    aggregate_bench_stats(&run_dir)?;
+    aggregate_bench_stats(&run_dir, config, run_idx, suite_path, &fuzzer_path)?;
     write_run_report(&run_dir)?;
 
     Ok(())
@@ -181,7 +187,13 @@ fn copy_dir(src: &Path, dst: &Path) -> Result<()> {
     Ok(())
 }
 
-fn aggregate_bench_stats(run_dir: &Path) -> Result<()> {
+fn aggregate_bench_stats(
+    run_dir: &Path,
+    config: &BenchmarkConfig,
+    run_idx: usize,
+    suite_path: &Path,
+    fuzzer_path: &Path,
+) -> Result<()> {
     let bench_dir = run_dir.join("out").join("bench");
     if !bench_dir.exists() {
         log::warn!(
@@ -251,6 +263,19 @@ fn aggregate_bench_stats(run_dir: &Path) -> Result<()> {
 
     compute_relcov_and_hist(run_dir, &mut summary)?;
 
+    summary.metadata = Some(BenchMetadata {
+        suite: path_to_string(suite_path),
+        run_index: run_idx,
+        duration_secs: config.duration,
+        cores: config.cores.clone(),
+        timeout_ms: config.timeout_ms,
+        share_dir: path_to_string(&config.share_dir),
+        corpus_seed: path_to_string(&config.corpus_seed),
+        fuzzer_path: path_to_string(fuzzer_path),
+        bench_snapshot_secs: BENCH_SNAPSHOT_SECS,
+        git_commit: git_commit_hash(),
+    });
+
     let summary_path = run_dir.join("summary.json");
     fs::write(summary_path, serde_json::to_vec_pretty(&summary)?)?;
 
@@ -280,6 +305,23 @@ struct BenchSummary {
     edge_histogram: Option<EdgeHistogram>,
     #[serde(skip_serializing_if = "Option::is_none")]
     per_cpu_relcov: Option<Vec<RelcovEntry>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    metadata: Option<BenchMetadata>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct BenchMetadata {
+    suite: String,
+    run_index: usize,
+    duration_secs: u64,
+    cores: String,
+    timeout_ms: u64,
+    share_dir: String,
+    corpus_seed: String,
+    fuzzer_path: String,
+    bench_snapshot_secs: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    git_commit: Option<String>,
 }
 
 fn parse_bench_file(path: &Path) -> Result<Vec<BenchSample>> {
@@ -465,6 +507,27 @@ fn write_run_report(run_dir: &Path) -> Result<()> {
             ));
         }
     }
+    if let Some(meta) = &summary.metadata {
+        report.push_str("- Metadata:\n");
+        report.push_str(&format!("  - Suite: {}\n", meta.suite));
+        report.push_str(&format!("  - Run index: {}\n", meta.run_index));
+        report.push_str(&format!(
+            "  - Duration target (s): {}\n",
+            meta.duration_secs
+        ));
+        report.push_str(&format!("  - Cores: {}\n", meta.cores));
+        report.push_str(&format!("  - Timeout (ms): {}\n", meta.timeout_ms));
+        report.push_str(&format!("  - Share dir: {}\n", meta.share_dir));
+        report.push_str(&format!("  - Corpus seed: {}\n", meta.corpus_seed));
+        report.push_str(&format!("  - Fuzzer: {}\n", meta.fuzzer_path));
+        report.push_str(&format!(
+            "  - Bench snapshot interval (s): {}\n",
+            meta.bench_snapshot_secs
+        ));
+        if let Some(commit) = &meta.git_commit {
+            report.push_str(&format!("  - Git commit: {}\n", commit));
+        }
+    }
     report.push('\n');
     report.push_str(&format!(
         "[stats.csv]({}) | [summary.json]({})\n",
@@ -590,4 +653,21 @@ fn mean_relcov(entries: &[RelcovEntry]) -> f64 {
     }
     let sum: f64 = entries.iter().map(|e| e.relcov_pct).sum();
     sum / entries.len() as f64
+}
+
+fn path_to_string(path: &Path) -> String {
+    path.display().to_string()
+}
+
+fn git_commit_hash() -> Option<String> {
+    let output = Command::new("git")
+        .arg("rev-parse")
+        .arg("HEAD")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let commit = String::from_utf8(output.stdout).ok()?;
+    Some(commit.trim().to_string())
 }
