@@ -1,8 +1,9 @@
 use std::{
+    collections::HashMap,
     ffi::OsStr,
     fmt::Write,
     fs::{self, File},
-    io::Read,
+    io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     thread,
@@ -268,6 +269,7 @@ fn aggregate_bench_stats(
     }
 
     compute_relcov_and_hist(run_dir, &mut summary)?;
+    summary.mutation_stats = compute_mutation_stats(run_dir)?;
 
     summary.metadata = Some(BenchMetadata {
         suite: path_to_string(suite_path),
@@ -311,6 +313,8 @@ struct BenchSummary {
     edge_histogram: Option<EdgeHistogram>,
     #[serde(skip_serializing_if = "Option::is_none")]
     per_cpu_relcov: Option<Vec<RelcovEntry>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mutation_stats: Option<MutationStats>,
     #[serde(skip_serializing_if = "Option::is_none")]
     metadata: Option<BenchMetadata>,
 }
@@ -455,6 +459,73 @@ fn compute_relcov_and_hist(run_dir: &Path, summary: &mut BenchSummary) -> Result
     Ok(())
 }
 
+fn compute_mutation_stats(run_dir: &Path) -> Result<Option<MutationStats>> {
+    let bench_dir = run_dir.join("out").join("bench");
+    if !bench_dir.exists() {
+        return Ok(None);
+    }
+
+    let mut records = Vec::new();
+    for entry in fs::read_dir(&bench_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension() != Some(OsStr::new("jsonl")) {
+            continue;
+        }
+        let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+        if !file_name.contains("mutations") {
+            continue;
+        }
+        let file = File::open(&path)?;
+        let reader = BufReader::new(file);
+        for (idx, line) in reader.lines().enumerate() {
+            let line = line?;
+            if line.trim().is_empty() {
+                continue;
+            }
+            match serde_json::from_str::<MutationRecord>(&line) {
+                Ok(rec) => records.push(rec),
+                Err(e) => log::warn!(
+                    "failed to parse mutation record {} in {}: {e}",
+                    idx,
+                    path.display()
+                ),
+            }
+        }
+    }
+
+    let total_records = records.iter().filter(|r| !r.chain.is_empty()).count();
+    if total_records == 0 {
+        return Ok(None);
+    }
+
+    let mut chain_counts: HashMap<Vec<String>, usize> = HashMap::new();
+
+    for rec in records.into_iter().filter(|r| !r.chain.is_empty()) {
+        *chain_counts.entry(rec.chain.clone()).or_default() += 1;
+    }
+
+    let make_chain_stats = |mut counts: Vec<(Vec<String>, usize)>, total: usize| {
+        counts.sort_by(|a, b| b.1.cmp(&a.1));
+        counts
+            .into_iter()
+            .take(10)
+            .map(|(chain, count)| ChainStat {
+                chain,
+                count,
+                share_pct: (count as f64 / total as f64) * 100.0,
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let top_chains = make_chain_stats(chain_counts.into_iter().collect(), total_records);
+
+    Ok(Some(MutationStats {
+        total_records,
+        top_chains,
+    }))
+}
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct EdgeHistogram {
     hit_1: usize,
@@ -473,6 +544,29 @@ struct RelcovEntry {
     cpu: String,
     edges: usize,
     relcov_pct: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct MutationRecord {
+    cpu: u32,
+    kind: String,
+    corpus_id: usize,
+    len: usize,
+    chain: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct MutationStats {
+    total_records: usize,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    top_chains: Vec<ChainStat>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ChainStat {
+    chain: Vec<String>,
+    count: usize,
+    share_pct: f64,
 }
 
 fn write_run_report(run_dir: &Path) -> Result<()> {
@@ -511,6 +605,23 @@ fn write_run_report(run_dir: &Path) -> Result<()> {
                 "  - {}: {} edges ({:.2}%)\n",
                 entry.cpu, entry.edges, entry.relcov_pct
             ));
+        }
+    }
+    if let Some(attr) = &summary.mutation_stats {
+        report.push_str(&format!(
+            "- Mutation stats ({} records):\n",
+            attr.total_records
+        ));
+        if !attr.top_chains.is_empty() {
+            report.push_str("  - Top mutation chains:\n");
+            for stat in attr.top_chains.iter().take(5) {
+                report.push_str(&format!(
+                    "    - [{}] x{} ({:.2}%)\n",
+                    stat.chain.join(" -> "),
+                    stat.count,
+                    stat.share_pct
+                ));
+            }
         }
     }
     if let Some(meta) = &summary.metadata {

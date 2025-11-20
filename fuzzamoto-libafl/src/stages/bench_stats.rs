@@ -6,6 +6,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use libafl::mutators::scheduled::LogMutationMetadata;
 use libafl::{
     Evaluator, ExecutesInput, HasMetadata,
     corpus::Corpus,
@@ -16,11 +17,13 @@ use libafl::{
     state::{HasCorpus, HasCurrentTestcase, HasExecutions, HasSolutions},
 };
 use libafl_bolts::tuples::Handle;
+use serde::Serialize;
 
 use crate::input::IrInput;
 
 /// Stage for collecting fuzzer stats useful for benchmarking
 pub struct BenchStatsStage<T, O> {
+    cpu_id: u32,
     trace_handle: Handle<T>,
 
     initialised: Instant,
@@ -28,9 +31,12 @@ pub struct BenchStatsStage<T, O> {
     update_interval: Duration,
 
     last_execs: u64,
+    last_corpus_count: usize,
+    last_solution_count: usize,
 
     stats_file_path: PathBuf,
     coverage_file_path: PathBuf,
+    mutations_file_path: PathBuf,
     csv_header_written: bool,
 
     _phantom: PhantomData<O>,
@@ -38,20 +44,26 @@ pub struct BenchStatsStage<T, O> {
 
 impl<T, O> BenchStatsStage<T, O> {
     pub fn new(
+        cpu_id: u32,
         trace_handle: Handle<T>,
         update_interval: Duration,
         stats_file_path: PathBuf,
     ) -> Self {
         let coverage_file_path = stats_file_path.with_extension("bin");
+        let mutations_file_path = stats_file_path.with_extension("mutations.jsonl");
         let last_update = Instant::now() - 2 * update_interval;
         Self {
+            cpu_id,
             trace_handle,
             initialised: Instant::now(),
             last_update,
             update_interval,
             last_execs: 0,
+            last_corpus_count: 0,
+            last_solution_count: 0,
             stats_file_path,
             coverage_file_path,
+            mutations_file_path,
             csv_header_written: false,
             _phantom: PhantomData::default(),
         }
@@ -147,6 +159,7 @@ where
         .map_err(|e| libafl::Error::unknown(format!("Failed to write CSV data: {}", e)))?;
 
         dump_coverage_map(map_observer, &self.coverage_file_path)?;
+        self.record_new_mutations(state)?;
 
         Ok(())
     }
@@ -162,4 +175,86 @@ fn dump_coverage_map<O: MapObserver<Entry = u8>>(
     file.write_all(&data)
         .map_err(|e| libafl::Error::unknown(format!("Failed to write coverage file: {e}")))?;
     Ok(())
+}
+
+#[derive(Serialize)]
+struct MutationRecord<'a> {
+    cpu: u32,
+    kind: &'static str,
+    corpus_id: usize,
+    len: usize,
+    chain: &'a [std::borrow::Cow<'static, str>],
+}
+
+impl<T, O> BenchStatsStage<T, O> {
+    fn record_new_mutations<S>(&mut self, state: &mut S) -> Result<(), libafl::Error>
+    where
+        S: HasCorpus<IrInput> + HasSolutions<IrInput> + HasMetadata,
+    {
+        let mut corpus_count = self.last_corpus_count;
+        let mut solution_count = self.last_solution_count;
+
+        self.record_for_corpus(state.corpus(), &mut corpus_count, "corpus")?;
+        self.record_for_corpus(state.solutions(), &mut solution_count, "solution")?;
+
+        self.last_corpus_count = corpus_count;
+        self.last_solution_count = solution_count;
+        Ok(())
+    }
+
+    fn record_for_corpus<C>(
+        &mut self,
+        corpus: &C,
+        last_count: &mut usize,
+        kind: &'static str,
+    ) -> Result<(), libafl::Error>
+    where
+        C: Corpus<IrInput>,
+    {
+        let count = corpus.count();
+        if count <= *last_count {
+            // Handle the case where entries were removed
+            if count < *last_count {
+                *last_count = count;
+            }
+            return Ok(());
+        }
+
+        let _ = std::fs::create_dir_all(
+            self.mutations_file_path
+                .parent()
+                .unwrap_or_else(|| self.stats_file_path.parent().unwrap()),
+        );
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.mutations_file_path)
+            .map_err(|e| libafl::Error::unknown(format!("Failed to open mutations file: {}", e)))?;
+
+        for idx in *last_count..count {
+            let id = corpus.nth(idx);
+            let testcase = corpus.get(id)?.borrow();
+            if let Some(meta) = testcase.metadata_map().get::<LogMutationMetadata>() {
+                // LibAFL's LoggerScheduledMutator records chains in reverse (last mutator first),
+                // so flip here to store them in execution order for readability.
+                let chain: Vec<_> = meta.iter().rev().cloned().collect();
+                let record = MutationRecord {
+                    cpu: self.cpu_id,
+                    kind,
+                    corpus_id: usize::from(id),
+                    len: chain.len(),
+                    chain: &chain,
+                };
+                serde_json::to_writer(&mut file, &record).map_err(|e| {
+                    libafl::Error::unknown(format!("Failed to serialize mutation record: {e}"))
+                })?;
+                writeln!(&mut file).map_err(|e| {
+                    libafl::Error::unknown(format!("Failed to write mutation record: {e}"))
+                })?;
+            }
+        }
+
+        *last_count = count;
+        Ok(())
+    }
 }
