@@ -7,8 +7,8 @@ use std::{
 };
 
 use libafl::{
-    corpus::Corpus,
     Evaluator, ExecutesInput, HasMetadata,
+    corpus::Corpus,
     events::EventFirer,
     executors::{Executor, HasObservers},
     observers::{CanTrack, MapObserver, ObserversTuple},

@@ -1,5 +1,6 @@
 use std::{
     ffi::OsStr,
+    fmt::Write,
     fs::{self, File},
     io::Read,
     path::{Path, PathBuf},
@@ -21,6 +22,11 @@ impl BenchmarkCommand {
     pub fn execute(cmd: &BenchmarkCommands) -> Result<()> {
         match cmd {
             BenchmarkCommands::Run { suite, output } => run_suite(suite, output),
+            BenchmarkCommands::Compare {
+                baseline,
+                candidate,
+                output,
+            } => compare_runs(baseline, candidate, output.as_ref().map(PathBuf::as_path)),
         }
     }
 }
@@ -33,6 +39,15 @@ pub enum BenchmarkCommands {
         suite: PathBuf,
         #[arg(long, help = "Output directory for run artifacts")]
         output: PathBuf,
+    },
+    /// Compare two benchmark run directories and report deltas
+    Compare {
+        #[arg(long, help = "Baseline run directory (must contain summary.json)")]
+        baseline: PathBuf,
+        #[arg(long, help = "Candidate run directory (must contain summary.json)")]
+        candidate: PathBuf,
+        #[arg(long, help = "Optional path to write a comparison report (Markdown)")]
+        output: Option<PathBuf>,
     },
 }
 
@@ -458,4 +473,121 @@ fn write_run_report(run_dir: &Path) -> Result<()> {
     ));
     fs::write(run_dir.join("report.md"), report)?;
     Ok(())
+}
+
+fn compare_runs(baseline_dir: &Path, candidate_dir: &Path, output: Option<&Path>) -> Result<()> {
+    let baseline = load_summary(baseline_dir)?;
+    let candidate = load_summary(candidate_dir)?;
+
+    let mut report = String::new();
+    writeln!(
+        &mut report,
+        "# Benchmark Comparison\n\n- Baseline: {}\n- Candidate: {}\n",
+        baseline_dir.display(),
+        candidate_dir.display()
+    )
+    .expect("writing to string cannot fail");
+
+    write_diff_line_u64(
+        &mut report,
+        "Total execs",
+        baseline.total_execs,
+        candidate.total_execs,
+    );
+    write_diff_line_f64(
+        &mut report,
+        "Mean exec/sec",
+        baseline.mean_execs_per_sec,
+        candidate.mean_execs_per_sec,
+    );
+    write_diff_line_f64(
+        &mut report,
+        "Max coverage (%)",
+        baseline.max_coverage_pct,
+        candidate.max_coverage_pct,
+    );
+    write_diff_line_u64(
+        &mut report,
+        "Final corpus size",
+        baseline.final_corpus_size as u64,
+        candidate.final_corpus_size as u64,
+    );
+    if let (Some(base_edges), Some(cand_edges)) = (baseline.unique_edges, candidate.unique_edges) {
+        write_diff_line_u64(
+            &mut report,
+            "Unique edges",
+            base_edges as u64,
+            cand_edges as u64,
+        );
+    }
+    if let (Some(base_hist), Some(cand_hist)) = (
+        baseline.edge_histogram.as_ref(),
+        candidate.edge_histogram.as_ref(),
+    ) {
+        writeln!(
+            &mut report,
+            "- Edge histogram: 1-hit {} -> {}, 2-3 hits {} -> {}, >=4 hits {} -> {}",
+            base_hist.hit_1,
+            cand_hist.hit_1,
+            base_hist.hit_2_3,
+            cand_hist.hit_2_3,
+            base_hist.hit_ge_4,
+            cand_hist.hit_ge_4
+        )
+        .expect("writing to string cannot fail");
+    }
+
+    if let (Some(base_relcov), Some(cand_relcov)) = (
+        baseline.per_cpu_relcov.as_ref(),
+        candidate.per_cpu_relcov.as_ref(),
+    ) {
+        let base_mean = mean_relcov(base_relcov);
+        let cand_mean = mean_relcov(cand_relcov);
+        write_diff_line_f64(&mut report, "Mean per-CPU relcov (%)", base_mean, cand_mean);
+    }
+
+    report.push('\n');
+
+    if let Some(path) = output {
+        fs::write(path, &report)?;
+        println!("Wrote comparison report to {}", path.display());
+    } else {
+        print!("{report}");
+    }
+
+    Ok(())
+}
+
+fn load_summary(run_dir: &Path) -> Result<BenchSummary> {
+    let summary_path = run_dir.join("summary.json");
+    if !summary_path.exists() {
+        return Err(CliError::FileNotFound(summary_path.display().to_string()));
+    }
+    let summary_bytes = fs::read(&summary_path)?;
+    let summary: BenchSummary = serde_json::from_slice(&summary_bytes)?;
+    Ok(summary)
+}
+
+fn write_diff_line_f64(buf: &mut String, label: &str, baseline: f64, candidate: f64) {
+    let delta = candidate - baseline;
+    let _ = writeln!(
+        buf,
+        "- {label}: {candidate:.4} (delta {delta:+.4} vs {baseline:.4})"
+    );
+}
+
+fn write_diff_line_u64(buf: &mut String, label: &str, baseline: u64, candidate: u64) {
+    let delta = candidate as i128 - baseline as i128;
+    let _ = writeln!(
+        buf,
+        "- {label}: {candidate} (delta {delta:+} vs {baseline})"
+    );
+}
+
+fn mean_relcov(entries: &[RelcovEntry]) -> f64 {
+    if entries.is_empty() {
+        return 0.0;
+    }
+    let sum: f64 = entries.iter().map(|e| e.relcov_pct).sum();
+    sum / entries.len() as f64
 }
