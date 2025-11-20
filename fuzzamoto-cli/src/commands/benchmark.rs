@@ -59,6 +59,8 @@ struct BenchmarkConfig {
     cores: String,
     #[serde(default = "default_timeout_ms")]
     timeout_ms: u64,
+    #[serde(default = "default_bench_snapshot_secs")]
+    bench_snapshot_secs: u64,
     share_dir: PathBuf,
     corpus_seed: PathBuf,
     #[serde(default)]
@@ -67,6 +69,10 @@ struct BenchmarkConfig {
 
 fn default_timeout_ms() -> u64 {
     1_000
+}
+
+fn default_bench_snapshot_secs() -> u64 {
+    BENCH_SNAPSHOT_SECS
 }
 
 fn run_suite(suite: &PathBuf, output: &PathBuf) -> Result<()> {
@@ -272,7 +278,7 @@ fn aggregate_bench_stats(
         share_dir: path_to_string(&config.share_dir),
         corpus_seed: path_to_string(&config.corpus_seed),
         fuzzer_path: path_to_string(fuzzer_path),
-        bench_snapshot_secs: BENCH_SNAPSHOT_SECS,
+        bench_snapshot_secs: config.bench_snapshot_secs,
         git_commit: git_commit_hash(),
     });
 
