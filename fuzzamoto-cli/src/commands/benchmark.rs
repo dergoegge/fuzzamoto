@@ -382,8 +382,30 @@ fn compute_relcov_and_hist(run_dir: &Path, summary: &mut BenchSummary) -> Result
         return Ok(());
     }
 
-    let mut cpu_maps: Vec<(String, Vec<u8>)> = Vec::new();
-    for entry in fs::read_dir(&bench_dir)? {
+    let cpu_maps = load_cpu_maps(&bench_dir)?;
+    if cpu_maps.is_empty() {
+        return Ok(());
+    }
+
+    let Some(union_map) = build_union_map(&cpu_maps, &bench_dir) else {
+        return Ok(());
+    };
+    if union_map.is_empty() {
+        return Ok(());
+    }
+
+    let (histogram, total_edges) = histogram_from_union(&union_map);
+    summary.unique_edges = Some(total_edges);
+    summary.edge_histogram = Some(histogram);
+    summary.per_cpu_relcov = Some(compute_per_cpu_relcov(&cpu_maps, total_edges));
+
+    Ok(())
+}
+
+/// Load per-CPU Nyx coverage bitmaps from `bench/bench-cpu_*.bin`.
+fn load_cpu_maps(bench_dir: &Path) -> Result<Vec<(String, Vec<u8>)>> {
+    let mut cpu_maps = Vec::new();
+    for entry in fs::read_dir(bench_dir)? {
         let entry = entry?;
         let path = entry.path();
         if path.extension() != Some(OsStr::new("bin")) {
@@ -400,35 +422,40 @@ fn compute_relcov_and_hist(run_dir: &Path, summary: &mut BenchSummary) -> Result
         }
         cpu_maps.push((cpu, data));
     }
+    Ok(cpu_maps)
+}
 
-    if cpu_maps.is_empty() {
-        return Ok(());
-    }
-
-    let map_len = cpu_maps[0].1.len();
+/// Validate map sizes and OR them into a single union coverage map.
+fn build_union_map(cpu_maps: &[(String, Vec<u8>)], bench_dir: &Path) -> Option<Vec<u8>> {
+    let map_len = cpu_maps.first()?.1.len();
     if map_len == 0 {
-        return Ok(());
+        return None;
     }
+    // All per-CPU maps must be the same size; otherwise relcov/hist are meaningless.
     if cpu_maps.iter().any(|(_, map)| map.len() != map_len) {
         log::warn!(
             "coverage map sizes differ under {}, skipping relcov aggregation",
             bench_dir.display()
         );
-        return Ok(());
+        return None;
     }
 
     let mut union_map = vec![0u8; map_len];
-    for (_, map) in &cpu_maps {
+    for (_, map) in cpu_maps {
         for (idx, &byte) in map.iter().enumerate() {
             if byte > union_map[idx] {
                 union_map[idx] = byte;
             }
         }
     }
+    Some(union_map)
+}
 
+/// Build the edge-count histogram (1-hit, 2–3, 4+) from the union map.
+fn histogram_from_union(union_map: &[u8]) -> (EdgeHistogram, usize) {
     let mut histogram = EdgeHistogram::default();
-    for byte in &union_map {
-        match *byte {
+    for &byte in union_map {
+        match byte {
             0 => {}
             1 => histogram.hit_1 += 1,
             2 | 3 => histogram.hit_2_3 += 1,
@@ -436,15 +463,17 @@ fn compute_relcov_and_hist(run_dir: &Path, summary: &mut BenchSummary) -> Result
         }
     }
     let total_edges = histogram.total_edges();
-    summary.unique_edges = Some(total_edges);
-    summary.edge_histogram = Some(histogram);
+    (histogram, total_edges)
+}
 
-    let per_cpu: Vec<_> = cpu_maps
-        .into_iter()
+/// Compute per-CPU relative coverage (edges per CPU / union edges).
+fn compute_per_cpu_relcov(cpu_maps: &[(String, Vec<u8>)], total_edges: usize) -> Vec<RelcovEntry> {
+    cpu_maps
+        .iter()
         .map(|(cpu, map)| {
             let edges = map.iter().filter(|&&b| b > 0).count();
             RelcovEntry {
-                cpu,
+                cpu: cpu.clone(),
                 edges,
                 relcov_pct: if total_edges > 0 {
                     (edges as f64 / total_edges as f64) * 100.0
@@ -453,10 +482,7 @@ fn compute_relcov_and_hist(run_dir: &Path, summary: &mut BenchSummary) -> Result
                 },
             }
         })
-        .collect();
-    summary.per_cpu_relcov = Some(per_cpu);
-
-    Ok(())
+        .collect()
 }
 
 fn compute_mutation_stats(run_dir: &Path) -> Result<Option<MutationStats>> {
