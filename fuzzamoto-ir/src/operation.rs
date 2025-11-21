@@ -1,6 +1,24 @@
-use crate::{ProgramValidationError, Variable};
+use crate::{
+    ProgramValidationError, Variable, generators::compact_block::BlockTransactionsRequestRecved,
+};
 
 use std::{fmt, time::Duration};
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Hash)]
+pub enum ProbeOperation {
+    EnableRecv,
+    DisableRecv,
+}
+
+impl fmt::Display for ProbeOperation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            ProbeOperation::EnableRecv => "EnableRecv",
+            ProbeOperation::DisableRecv => "DisableRecv",
+        };
+        write!(f, "{}", s)
+    }
+}
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Hash)]
 pub enum Operation {
@@ -28,6 +46,10 @@ pub enum Operation {
     LoadCompactFilterType(u8),
     LoadPrivateKey([u8; 32]),
     LoadSigHashFlags(u8),
+    LoadNonce(u64),
+    LoadTxIndexes {
+        indexes: Vec<usize>,
+    },
     LoadTxo {
         outpoint: ([u8; 32], u32),
         value: u64,
@@ -78,6 +100,10 @@ pub enum Operation {
     BuildOpReturnScripts,
     BuildPayToAnchor,
 
+    // cmpctblock building operati
+    BeginBuildCmpctBlock,
+    EndBuildCmpctBlock,
+
     // filterload building operations
     BeginBuildFilterLoad,
     AddTxToFilter,
@@ -116,6 +142,14 @@ pub enum Operation {
     BuildBlock,
     AddTx,
 
+    LoadBlockTxnRequestVec {
+        vec: Vec<BlockTransactionsRequestRecved>,
+    },
+    // build the blocktx from metadata
+    BuildBIP152BlockTxReqFromMetadata,
+    // build the blocktx from block using random indexes
+    BuildBIP152BlockTxReq,
+
     /// Inventory building
     BeginBuildInventory,
     EndBuildInventory,
@@ -126,6 +160,8 @@ pub enum Operation {
     AddBlockInv,            // Block by hash without witness
     AddBlockWithWitnessInv, // Block by hash with witness
     AddFilteredBlockInv,    // SPV proof by block hash for txs matching filter
+
+    Probe(ProbeOperation),
 
     /// Message sending
     SendGetData,
@@ -141,11 +177,11 @@ pub enum Operation {
     SendFilterLoad,
     SendFilterAdd,
     SendFilterClear,
-    // TODO: SendCompactBlock
-    // TODO: SendGetBlockTxn
-    // TODO: SendBlockTxn
-    // TODO: SendGetBlocks
-    // TODO: SendGetHeaders
+    SendCompactBlock,
+    SendBlockTxn, // TODO: SendGetBlockTxn
+                  // TODO: SendBlockTxn
+                  // TODO: SendGetBlocks
+                  // TODO: SendGetHeaders
 }
 
 impl fmt::Display for Operation {
@@ -252,6 +288,19 @@ impl fmt::Display for Operation {
             Operation::LoadFilterAdd { data } => {
                 write!(f, "LoadFilterAdd({})", hex_string(data))
             }
+            Operation::LoadNonce(nonce) => {
+                write!(f, "LoadNonce({})", nonce)
+            }
+            Operation::LoadTxIndexes { indexes } => {
+                write!(f, "LoadTxIndexes({:?})", indexes)
+            }
+            Operation::LoadBlockTxnRequestVec { vec } => {
+                write!(f, "LoadBlockTxnRequestVec({:?})", vec)
+            }
+            Operation::BuildBIP152BlockTxReqFromMetadata => {
+                write!(f, "BuildBIP152BlockTxReqFromMetadata")
+            }
+            Operation::BuildBIP152BlockTxReq => write!(f, "BuildBIP152BlockTxReq"),
             Operation::BeginBuildFilterLoad => write!(f, "BeginBuildFilterLoad"),
             Operation::EndBuildFilterLoad => write!(f, "EndBuildFilterLoad"),
             Operation::AddTxToFilter => write!(f, "AddTxToFilter"),
@@ -270,6 +319,8 @@ impl fmt::Display for Operation {
             Operation::BeginWitnessStack => write!(f, "BeginWitnessStack"),
             Operation::EndWitnessStack => write!(f, "EndWitnessStack"),
             Operation::AddWitness => write!(f, "AddWitness"),
+            Operation::BeginBuildCmpctBlock => write!(f, "BeginBuildCmpctBlock"),
+            Operation::EndBuildCmpctBlock => write!(f, "EndBuildCmpctBlock"),
 
             Operation::BeginBuildCoinbaseTx => write!(f, "BeginBuildCoinbaseTx"),
             Operation::EndBuildCoinbaseTx => write!(f, "EndBuildCoinbaseTx"),
@@ -306,6 +357,9 @@ impl fmt::Display for Operation {
             Operation::SendFilterLoad => write!(f, "SendFilterLoad"),
             Operation::SendFilterAdd => write!(f, "SendFilterAdd"),
             Operation::SendFilterClear => write!(f, "SendFilterClear"),
+            Operation::SendCompactBlock => write!(f, "SendCompactBlock"),
+            Operation::SendBlockTxn => write!(f, "SendBlockTxn"),
+            Operation::Probe(op) => write!(f, "Probe({})", op),
         }
     }
 }
@@ -346,6 +400,7 @@ impl Operation {
             | Operation::BeginWitnessStack
             | Operation::BeginBlockTransactions
             | Operation::BeginBuildFilterLoad
+            | Operation::BeginBuildCmpctBlock
             | Operation::BeginBuildCoinbaseTx
             | Operation::BeginBuildCoinbaseTxOutputs => true,
             // Exhaustive match to fail when new ops are added
@@ -387,7 +442,13 @@ impl Operation {
             | Operation::AddTxoToFilter
             | Operation::BuildFilterAddFromTx
             | Operation::BuildFilterAddFromTxo
+            | Operation::LoadNonce(..)
+            | Operation::LoadTxIndexes { .. }
+            | Operation::LoadBlockTxnRequestVec { .. }
+            | Operation::EndBuildCmpctBlock
             | Operation::EndBuildTx
+            | Operation::BuildBIP152BlockTxReqFromMetadata
+            | Operation::BuildBIP152BlockTxReq
             | Operation::EndBuildTxInputs
             | Operation::EndBuildTxOutputs
             | Operation::EndBuildInventory
@@ -419,6 +480,9 @@ impl Operation {
             | Operation::SendFilterAdd
             | Operation::SendFilterClear
             | Operation::SendBlockNoWit
+            | Operation::SendCompactBlock
+            | Operation::SendBlockTxn
+            | Operation::Probe(_)
             | Operation::EndBuildCoinbaseTx
             | Operation::EndBuildCoinbaseTxOutputs
             | Operation::BuildCoinbaseTxInput
@@ -442,6 +506,7 @@ impl Operation {
             | (Operation::BeginWitnessStack, Operation::EndWitnessStack)
             | (Operation::BeginBlockTransactions, Operation::EndBlockTransactions)
             | (Operation::BeginBuildFilterLoad, Operation::EndBuildFilterLoad)
+            | (Operation::BeginBuildCmpctBlock, Operation::EndBuildCmpctBlock)
             | (Operation::BeginBuildCoinbaseTx, Operation::EndBuildCoinbaseTx)
             | (Operation::BeginBuildCoinbaseTxOutputs, Operation::EndBuildCoinbaseTxOutputs) => {
                 true
@@ -459,6 +524,7 @@ impl Operation {
             | Operation::EndWitnessStack
             | Operation::EndBlockTransactions
             | Operation::EndBuildFilterLoad
+            | Operation::EndBuildCmpctBlock
             | Operation::EndBuildCoinbaseTx
             | Operation::EndBuildCoinbaseTxOutputs => true,
             // Exhaustive match to fail when new ops are added
@@ -495,6 +561,11 @@ impl Operation {
             | Operation::LoadSigHashFlags(..)
             | Operation::LoadFilterLoad { .. }
             | Operation::LoadFilterAdd { .. }
+            | Operation::LoadNonce(..)
+            | Operation::LoadTxIndexes { .. }
+            | Operation::LoadBlockTxnRequestVec { .. }
+            | Operation::BuildBIP152BlockTxReqFromMetadata
+            | Operation::BuildBIP152BlockTxReq
             | Operation::BeginBuildTx
             | Operation::BeginBuildTxInputs
             | Operation::BeginBuildTxOutputs
@@ -529,9 +600,13 @@ impl Operation {
             | Operation::AddTxoToFilter
             | Operation::BuildFilterAddFromTx
             | Operation::BuildFilterAddFromTxo
+            | Operation::BeginBuildCmpctBlock
             | Operation::SendFilterLoad
             | Operation::SendFilterAdd
             | Operation::SendFilterClear
+            | Operation::SendCompactBlock
+            | Operation::SendBlockTxn
+            | Operation::Probe(_)
             | Operation::BeginBuildCoinbaseTx
             | Operation::BeginBuildCoinbaseTxOutputs
             | Operation::BuildCoinbaseTxInput
@@ -614,6 +689,9 @@ impl Operation {
             Operation::LoadFilterAdd { .. } => vec![Variable::FilterAdd],
             Operation::LoadPrivateKey(..) => vec![Variable::PrivateKey],
             Operation::LoadSigHashFlags(..) => vec![Variable::SigHashFlags],
+            Operation::LoadNonce(..) => vec![Variable::Nonce],
+            Operation::LoadTxIndexes { .. } => vec![Variable::Indexes],
+            Operation::LoadBlockTxnRequestVec { .. } => vec![Variable::BlockTxnRequestVec],
             Operation::BeginBuildTx => vec![],
             Operation::EndBuildTx => vec![Variable::ConstTx],
             Operation::BeginBuildTxInputs => vec![],
@@ -623,10 +701,16 @@ impl Operation {
             Operation::AddTxInput => vec![],
             Operation::AddTxOutput => vec![],
 
+            Operation::BuildBIP152BlockTxReqFromMetadata => vec![Variable::BIP152BlockTx],
+            Operation::BuildBIP152BlockTxReq => vec![Variable::BIP152BlockTx],
+
             Operation::BeginBuildFilterLoad => vec![],
             Operation::AddTxToFilter => vec![],
             Operation::AddTxoToFilter => vec![],
             Operation::EndBuildFilterLoad => vec![Variable::ConstFilterLoad],
+
+            Operation::BeginBuildCmpctBlock => vec![],
+            Operation::EndBuildCmpctBlock => vec![Variable::ConstCmpctBlock],
 
             Operation::BuildFilterAddFromTx => vec![Variable::FilterAdd],
             Operation::BuildFilterAddFromTxo => vec![Variable::FilterAdd],
@@ -670,6 +754,9 @@ impl Operation {
             Operation::SendFilterLoad => vec![],
             Operation::SendFilterAdd => vec![],
             Operation::SendFilterClear => vec![],
+            Operation::SendCompactBlock => vec![],
+            Operation::SendBlockTxn => vec![],
+            Operation::Probe(_) => vec![],
         }
     }
 
@@ -773,6 +860,18 @@ impl Operation {
                 Variable::CompactFilterType,
                 Variable::Header,
             ],
+            Operation::SendBlockTxn => vec![Variable::Connection, Variable::BIP152BlockTx],
+
+            Operation::BuildBIP152BlockTxReqFromMetadata => {
+                vec![
+                    Variable::Connection,
+                    Variable::Block,
+                    Variable::BlockTxnRequestVec,
+                ]
+            }
+            Operation::BuildBIP152BlockTxReq => {
+                vec![Variable::Block, Variable::Indexes]
+            }
 
             Operation::BeginBuildFilterLoad => vec![Variable::ConstFilterLoad],
             Operation::AddTxToFilter => vec![Variable::MutFilterLoad, Variable::ConstTx],
@@ -781,9 +880,20 @@ impl Operation {
             Operation::BuildFilterAddFromTx => vec![Variable::ConstTx],
             Operation::BuildFilterAddFromTxo => vec![Variable::Txo],
 
+            Operation::BeginBuildCmpctBlock => vec![
+                Variable::Block,
+                Variable::Nonce,
+                Variable::TxVersion,
+                Variable::Indexes,
+            ],
+            Operation::EndBuildCmpctBlock => vec![Variable::MutCmpctBlock],
+
             Operation::SendFilterLoad => vec![Variable::Connection, Variable::ConstFilterLoad],
             Operation::SendFilterAdd => vec![Variable::Connection, Variable::FilterAdd],
             Operation::SendFilterClear => vec![Variable::Connection],
+            Operation::SendCompactBlock => vec![Variable::Connection, Variable::ConstCmpctBlock],
+
+            Operation::Probe(_) => vec![],
             // Operations with no inputs
             Operation::Nop { .. }
             | Operation::LoadBytes(_)
@@ -807,6 +917,9 @@ impl Operation {
             | Operation::LoadSigHashFlags(..)
             | Operation::LoadFilterLoad { .. }
             | Operation::LoadFilterAdd { .. }
+            | Operation::LoadNonce(..)
+            | Operation::LoadTxIndexes { .. }
+            | Operation::LoadBlockTxnRequestVec { .. }
             | Operation::BeginBuildTxInputs
             | Operation::BeginBuildInventory
             | Operation::BeginBlockTransactions
@@ -824,6 +937,7 @@ impl Operation {
             Operation::BeginBuildInventory => vec![Variable::MutInventory],
             Operation::BeginBlockTransactions => vec![Variable::MutBlockTransactions],
             Operation::BeginBuildFilterLoad => vec![Variable::MutFilterLoad],
+            Operation::BeginBuildCmpctBlock => vec![Variable::MutCmpctBlock],
             Operation::BeginBuildCoinbaseTx => vec![Variable::MutTx],
             Operation::BeginBuildCoinbaseTxOutputs => vec![Variable::MutTxOutputs],
             Operation::Nop {
@@ -868,6 +982,12 @@ impl Operation {
             | Operation::LoadSigHashFlags(..)
             | Operation::LoadFilterLoad { .. }
             | Operation::LoadFilterAdd { .. }
+            | Operation::LoadNonce(..)
+            | Operation::LoadTxIndexes { .. }
+            | Operation::LoadBlockTxnRequestVec { .. }
+            | Operation::BuildBIP152BlockTxReqFromMetadata
+            | Operation::BuildBIP152BlockTxReq
+            | Operation::EndBuildCmpctBlock
             | Operation::EndBuildTx
             | Operation::EndBuildTxInputs
             | Operation::EndBuildTxOutputs
@@ -900,6 +1020,9 @@ impl Operation {
             | Operation::SendFilterLoad
             | Operation::SendFilterAdd
             | Operation::SendFilterClear
+            | Operation::SendCompactBlock
+            | Operation::SendBlockTxn
+            | Operation::Probe(_)
             | Operation::EndBuildCoinbaseTx
             | Operation::BuildCoinbaseTxInput
             | Operation::EndBuildCoinbaseTxOutputs

@@ -99,8 +99,13 @@ impl Instruction {
             | Operation::LoadLockTime(..)
             | Operation::LoadSequence(..)
             | Operation::LoadSize(..)
+            | Operation::LoadNonce(..)
+            | Operation::LoadTxIndexes { .. }
             | Operation::LoadFilterLoad { .. }
             | Operation::LoadFilterAdd { .. }
+            | Operation::LoadBlockTxnRequestVec { .. }
+            | Operation::BuildBIP152BlockTxReqFromMetadata
+            | Operation::BuildBIP152BlockTxReq
             | Operation::AddWitness
             | Operation::SendTx
             | Operation::SendTxNoWit
@@ -128,6 +133,8 @@ impl Instruction {
             | Operation::SendFilterLoad
             | Operation::SendFilterAdd
             | Operation::SendFilterClear
+            | Operation::SendCompactBlock
+            | Operation::SendBlockTxn
             | Operation::TakeTxo => true,
 
             Operation::Nop { .. }
@@ -145,6 +152,9 @@ impl Instruction {
             | Operation::BeginBlockTransactions
             | Operation::BeginBuildFilterLoad
             | Operation::EndBuildFilterLoad
+            | Operation::BeginBuildCmpctBlock
+            | Operation::EndBuildCmpctBlock
+            | Operation::Probe(_)
             | Operation::BeginBuildCoinbaseTx
             | Operation::EndBuildCoinbaseTx
             | Operation::BeginBuildCoinbaseTxOutputs
@@ -164,6 +174,7 @@ impl Instruction {
                 Operation::BeginBuildInventory => Some(InstructionContext::Inventory),
                 Operation::BeginBlockTransactions => Some(InstructionContext::BlockTransactions),
                 Operation::BeginBuildFilterLoad => Some(InstructionContext::BuildFilter),
+                Operation::BeginBuildCmpctBlock => Some(InstructionContext::BuildCmpctBlock),
                 Operation::BeginBuildCoinbaseTx => Some(InstructionContext::BuildCoinbaseTx),
                 Operation::BeginBuildCoinbaseTxOutputs => {
                     Some(InstructionContext::BuildCoinbaseTxOutputs)
@@ -196,6 +207,7 @@ pub enum InstructionContext {
     Inventory,
     BlockTransactions,
     BuildFilter,
+    BuildCmpctBlock,
     BuildCoinbaseTx,
     BuildCoinbaseTxOutputs,
 }

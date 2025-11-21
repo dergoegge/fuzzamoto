@@ -1,5 +1,5 @@
 use super::{Mutator, MutatorError, MutatorResult};
-use crate::{Program, ProgramBuilder};
+use crate::{PerTestcaseMetadata, Program, ProgramBuilder};
 
 use rand::{RngCore, seq::IteratorRandom};
 
@@ -10,7 +10,12 @@ use rand::{RngCore, seq::IteratorRandom};
 pub struct InputMutator;
 
 impl<R: RngCore> Mutator<R> for InputMutator {
-    fn mutate(&mut self, program: &mut Program, rng: &mut R) -> MutatorResult {
+    fn mutate(
+        &mut self,
+        program: &mut Program,
+        rng: &mut R,
+        _meta: Option<&PerTestcaseMetadata>,
+    ) -> MutatorResult {
         let Some(candidate_instruction) = program
             .instructions
             .iter()

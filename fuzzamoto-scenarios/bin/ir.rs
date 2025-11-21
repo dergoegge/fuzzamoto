@@ -1,9 +1,6 @@
 #[cfg(any(feature = "oracle_netsplit", feature = "oracle_consensus"))]
 use std::time::{Duration, Instant};
 
-#[cfg(feature = "nyx")]
-use fuzzamoto_nyx_sys::*;
-
 use bitcoin::hashes::Hash;
 use fuzzamoto::{
     connections::Transport,
@@ -12,6 +9,11 @@ use fuzzamoto::{
     scenarios::{Scenario, ScenarioInput, ScenarioResult, generic::GenericScenario},
     targets::{BitcoinCoreTarget, ConnectableTarget, HasTipHash, Target},
 };
+
+#[cfg(feature = "nyx")]
+use fuzzamoto_nyx_sys::*;
+#[cfg(feature = "nyx")]
+use std::ffi::CString;
 
 #[cfg(feature = "oracle_netsplit")]
 use fuzzamoto::oracles::{NetSplitContext, NetSplitOracle};
@@ -25,7 +27,7 @@ use fuzzamoto_ir::{
 };
 
 const COINBASE_MATURITY_HEIGHT_LIMIT: u32 = 100;
-const LATE_BLOCK_HEIGHT_LIMIT: u32 = 190;
+const LATE_BLOCK_HEIGHT_LIMIT: u32 = 199;
 const COINBASE_VALUE: u64 = 25 * 100_000_000;
 // OP_TRUE script pubkey: 0x0 0x20 sha256(OP_TRUE)
 const OP_TRUE_SCRIPT_PUBKEY: [u8; 34] = [
@@ -37,8 +39,19 @@ const OP_TRUE_SCRIPT_PUBKEY: [u8; 34] = [
 /// `fuzzamoto_ir::CompiledProgram`s as input.
 struct IrScenario<TX: Transport, T: Target<TX> + ConnectableTarget> {
     inner: GenericScenario<TX, T>,
+    logging: bool,
+    received: Vec<(usize, String, Vec<u8>)>,
     #[cfg(any(feature = "oracle_netsplit", feature = "oracle_consensus"))]
     second: T,
+}
+
+#[cfg(feature = "nyx")]
+pub fn nyx_print(bytes: &[u8]) {
+    if let Ok(message) = CString::new(bytes) {
+        unsafe {
+            nyx_println(message.as_ptr(), bytes.len());
+        }
+    }
 }
 
 pub struct TestCase {
@@ -200,16 +213,35 @@ where
                     if self.inner.connections.is_empty() {
                         return;
                     }
-
                     let num_connections = self.inner.connections.len();
-                    if let Some(connection) = self.inner.connections.get_mut(from % num_connections)
-                    {
+                    let dst = from % num_connections;
+
+                    if let Some(connection) = self.inner.connections.get_mut(dst) {
                         if cfg!(feature = "force_send_and_ping") {
-                            let _ = connection.send_and_ping(&(command, message));
+                            if self.logging {
+                                if let Ok(received) =
+                                    connection.send_and_recv(&(command, message), true)
+                                {
+                                    // log::info!("Received {:?}", received);
+                                    self.received.extend(
+                                        received.into_iter().map(|(s, bytes)| (dst, s, bytes)),
+                                    );
+                                }
+                            } else {
+                                let _ = connection.send_and_ping(&(command, message));
+                            }
                         } else {
                             let _ = connection.send(&(command, message));
                         }
                     }
+                }
+                CompiledAction::EnableLogging() => {
+                    log::info!("Enable logging for connection");
+                    self.logging = true;
+                }
+                CompiledAction::DisableLogging() => {
+                    log::info!("Disable logging for connection");
+                    self.logging = false;
                 }
                 CompiledAction::SetTime(time) => {
                     let _ = self.inner.target.set_mocktime(time);
@@ -219,6 +251,16 @@ where
                 _ => {}
             }
         }
+    }
+
+    fn print_received(&mut self) {
+        #[cfg(feature = "nyx")]
+        for message in &self.received {
+            if let Ok(bytes) = serde_json::to_vec(message) {
+                nyx_print(&bytes);
+            }
+        }
+        self.received.clear();
     }
 
     fn ping_connections(&mut self) {
@@ -288,8 +330,11 @@ where
         #[cfg(any(feature = "oracle_netsplit", feature = "oracle_consensus"))]
         let second = Self::create_and_sync_second_target(args, &inner.target)?;
 
+        let received = vec![];
         Ok(Self {
             inner,
+            logging: false,
+            received,
             #[cfg(any(feature = "oracle_netsplit", feature = "oracle_consensus"))]
             second,
         })
@@ -298,6 +343,7 @@ where
     fn run(&mut self, testcase: TestCase) -> ScenarioResult {
         self.process_actions(testcase.program.actions);
         self.ping_connections();
+        self.print_received();
         self.evaluate_oracles()
     }
 }

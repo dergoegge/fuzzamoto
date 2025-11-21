@@ -3,6 +3,9 @@ pub mod bench_stats;
 #[cfg(feature = "bench")]
 pub use bench_stats::*;
 
+pub mod probe;
+pub use probe::*;
+
 pub mod verify_timeouts;
 
 pub use verify_timeouts::*;

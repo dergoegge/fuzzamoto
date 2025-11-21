@@ -1,6 +1,8 @@
 pub mod advance_time;
 pub mod block;
+pub mod blocktxn_gen;
 pub mod bloom_filter;
+pub mod compact_block;
 pub mod compact_filters;
 pub mod getdata;
 pub mod send_raw_message;
@@ -10,7 +12,9 @@ pub mod witness;
 
 pub use advance_time::*;
 pub use block::*;
+pub use blocktxn_gen::*;
 pub use bloom_filter::*;
+pub use compact_block::*;
 pub use compact_filters::*;
 pub use getdata::*;
 pub use send_raw_message::*;

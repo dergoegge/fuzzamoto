@@ -11,6 +11,9 @@ use libafl::{
     state::HasCorpus,
 };
 
+pub mod recv;
+pub use recv::RecvFeedback;
+
 use crate::input::IrInput;
 use crate::stages::TimeoutsToVerify;
 

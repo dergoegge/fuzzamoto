@@ -12,6 +12,7 @@
 #include <sys/mman.h>
 #include <sys/shm.h>
 #include <unistd.h>
+#include <assert.h>
 
 #include "nyx.h"
 
@@ -133,6 +134,19 @@ void nyx_dump_file_to_host(const char *file_name, size_t file_name_len,
   file_obj.bytes = len;
   file_obj.data_ptr = (uintptr_t)data;
   kAFL_hypercall(HYPERCALL_KAFL_DUMP_FILE, (uintptr_t)(&file_obj));
+}
+
+void nyx_println(const char *message, size_t message_len) {
+    // Clamp to HPRINTF_MAX_SIZE - 1 to leave room for '\0'
+    size_t size = message_len;
+    if (size >= HPRINTF_MAX_SIZE) {
+      // Subtract one to accomodate the line ending
+      size = HPRINTF_MAX_SIZE - 1;
+    }
+    char message_copy[HPRINTF_MAX_SIZE];
+    memset(message_copy, 0, sizeof(message_copy));
+    memcpy(message_copy, message, size);
+    hprintf("%s\n", message_copy);
 }
 
 /** Copy the next fuzz input into `data` and return the new size of the input.

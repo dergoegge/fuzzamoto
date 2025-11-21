@@ -1,9 +1,9 @@
-use std::{any::Any, time::Duration};
-
+use crate::ProbeOperation;
 use bitcoin::{
     Amount, CompactTarget, EcdsaSighashType, NetworkKind, OutPoint, PrivateKey, Script, ScriptBuf,
     Sequence, Transaction, TxIn, TxMerkleNode, TxOut, Txid, WitnessMerkleNode, Wtxid,
     absolute::LockTime,
+    bip152::{BlockTransactions, BlockTransactionsRequest, HeaderAndShortIds},
     consensus::Encodable,
     ecdsa,
     hashes::{Hash, serde_macros::serde_details::SerdeHash, sha256},
@@ -12,6 +12,7 @@ use bitcoin::{
     p2p::{
         message_blockdata::Inventory,
         message_bloom::{BloomFlags, FilterAdd, FilterLoad},
+        message_compact_blocks::CmpctBlock,
         message_filter::{GetCFCheckpt, GetCFHeaders, GetCFilters},
     },
     script::PushBytesBuf,
@@ -19,8 +20,13 @@ use bitcoin::{
     sighash::SighashCache,
     transaction,
 };
+use std::{any::Any, time::Duration};
 
-use crate::{Instruction, Operation, Program, bloom::filter_insert, generators::block::Header};
+use crate::{
+    Instruction, Operation, Program,
+    bloom::filter_insert,
+    generators::{block::Header, compact_block::BlockTransactionsRequestRecved},
+};
 
 /// `Compiler` is responsible for compiling IR into a sequence of low-level actions to be performed
 /// on a node (i.e. mapping `fuzzamoto_ir::Program` -> `CompiledProgram`).
@@ -39,6 +45,10 @@ pub enum CompiledAction {
     SendRawMessage(usize, String, Vec<u8>),
     /// Set mock time for all nodes in the test
     SetTime(u64),
+    /// Enable message logging from a connection
+    EnableLogging(),
+    /// Disable message logging from a connection
+    DisableLogging(),
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
@@ -169,8 +179,15 @@ impl Compiler {
                 | Operation::LoadHeader { .. }
                 | Operation::LoadTxo { .. }
                 | Operation::LoadFilterLoad { .. }
-                | Operation::LoadFilterAdd { .. } => {
+                | Operation::LoadFilterAdd { .. }
+                | Operation::LoadNonce(..)
+                | Operation::LoadTxIndexes { .. }
+                | Operation::LoadBlockTxnRequestVec { .. } => {
                     self.handle_load_operations(&instruction)?;
+                }
+
+                Operation::BeginBuildCmpctBlock | Operation::EndBuildCmpctBlock => {
+                    self.handle_cmpct_block_building_operations(&instruction)?;
                 }
 
                 Operation::BeginBlockTransactions
@@ -207,6 +224,10 @@ impl Compiler {
                 | Operation::BuildPayToPubKeyHash
                 | Operation::BuildPayToWitnessPubKeyHash => {
                     self.handle_script_building_operations(&instruction)?;
+                }
+
+                Operation::BuildBIP152BlockTxReqFromMetadata | Operation::BuildBIP152BlockTxReq => {
+                    self.handle_bip152_blocktx_operations(&instruction)?;
                 }
 
                 Operation::BuildFilterAddFromTx
@@ -256,8 +277,14 @@ impl Compiler {
                 | Operation::SendGetCFCheckpt
                 | Operation::SendFilterLoad
                 | Operation::SendFilterAdd
-                | Operation::SendFilterClear => {
+                | Operation::SendFilterClear
+                | Operation::SendCompactBlock
+                | Operation::SendBlockTxn => {
                     self.handle_message_sending_operations(&instruction)?;
+                }
+
+                Operation::Probe(_) => {
+                    self.handle_probe_operations(&instruction)?;
                 }
             }
         }
@@ -344,6 +371,84 @@ impl Compiler {
         Ok(())
     }
 
+    fn handle_bip152_blocktx_operations(
+        &mut self,
+        instruction: &Instruction,
+    ) -> Result<(), CompilerError> {
+        match &instruction.operation {
+            Operation::BuildBIP152BlockTxReqFromMetadata => {
+                let connection_var = self.get_input::<usize>(&instruction.inputs, 0)?.clone();
+                let reqs = self
+                    .get_input_mut::<Vec<BlockTransactionsRequestRecved>>(&instruction.inputs, 2)?
+                    .clone();
+                let block = self.get_input::<bitcoin::Block>(&instruction.inputs, 1)?;
+
+                let mut blocktxn_req = BlockTransactionsRequest {
+                    block_hash: block.block_hash(),
+                    indexes: vec![],
+                };
+                /*
+                log::info!(
+                    "connection_var {} block_hash {:?}",
+                    connection_var,
+                    block.block_hash().as_raw_hash().as_byte_array()
+                );
+                */
+                for req in reqs {
+                    // log::info!("{} {:?}", req.conn(), req.hash());
+                    if connection_var == req.conn()
+                        && block.block_hash().as_raw_hash().as_byte_array() == req.hash()
+                    {
+                        // bingo we send this
+                        blocktxn_req.indexes.extend(req.indexes());
+                    }
+                }
+                let max = block.txdata.len() as u64;
+                let mut filtered_indexes: Vec<u64> = blocktxn_req
+                    .indexes
+                    .iter()
+                    .copied()
+                    .filter(|&i| i < max)
+                    .collect();
+                filtered_indexes.sort();
+                filtered_indexes.dedup();
+                blocktxn_req.indexes = filtered_indexes;
+
+                let blocktxn = BlockTransactions::from_request(&blocktxn_req, block)
+                    .expect("from_request should never fail");
+
+                self.append_variable(blocktxn);
+            }
+            Operation::BuildBIP152BlockTxReq => {
+                let block = self.get_input::<bitcoin::Block>(&instruction.inputs, 0)?;
+                let txindexes = self.get_input::<Vec<usize>>(&instruction.inputs, 1)?;
+
+                let mut blocktxn_req = BlockTransactionsRequest {
+                    block_hash: block.block_hash(),
+                    indexes: txindexes.iter().map(|&x| x as u64).collect(),
+                };
+
+                let max = block.txdata.len() as u64;
+                let mut filtered_indexes: Vec<u64> = blocktxn_req
+                    .indexes
+                    .iter()
+                    .copied()
+                    .filter(|&i| i < max)
+                    .collect();
+                filtered_indexes.sort();
+                filtered_indexes.dedup();
+                blocktxn_req.indexes = filtered_indexes;
+                let blocktxn = BlockTransactions::from_request(&blocktxn_req, block)
+                    .expect("from_request should never fail");
+
+                // log::info!("blocktxn_req {:?}", blocktxn_req);
+                self.append_variable(blocktxn);
+            }
+            _ => unreachable!("Non-bip152 blocktx operation passed to handle_witness_operations"),
+        }
+        Ok(())
+    }
+
     fn handle_witness_operations(
         &mut self,
         instruction: &Instruction,
@@ -419,6 +524,49 @@ impl Compiler {
             }
             _ => unreachable!(
                 "Non-filter-building operation passed to handle_filter_building_operations"
+            ),
+        }
+        Ok(())
+    }
+
+    fn handle_cmpct_block_building_operations(
+        &mut self,
+        instruction: &Instruction,
+    ) -> Result<(), CompilerError> {
+        match &instruction.operation {
+            Operation::BeginBuildCmpctBlock => {
+                let block = self.get_input::<bitcoin::Block>(&instruction.inputs, 0)?;
+                let nonce = self.get_input::<u64>(&instruction.inputs, 1)?;
+                let version = self.get_input::<u32>(&instruction.inputs, 2)?;
+                let mut prefill = self
+                    .get_input::<Vec<usize>>(&instruction.inputs, 3)?
+                    .clone();
+
+                // OperationMutator could destory our constraint. so we clamp here.
+                let version = version.clamp(&1, &2);
+                prefill.sort();
+                prefill.dedup();
+                let max = block.txdata.len();
+                let prefill_filtered = prefill
+                    .iter()
+                    .copied()
+                    .filter(|&i| i < max)
+                    .collect::<Vec<usize>>();
+                let header_and_shortids =
+                    HeaderAndShortIds::from_block(block, *nonce, *version, &prefill_filtered)
+                        .expect("from_block should never fail");
+                self.append_variable(CmpctBlock {
+                    compact_block: header_and_shortids,
+                });
+            }
+            Operation::EndBuildCmpctBlock => {
+                let cmpct_block = self
+                    .get_input_mut::<CmpctBlock>(&instruction.inputs, 0)?
+                    .clone();
+                self.append_variable(cmpct_block);
+            }
+            _ => unreachable!(
+                "Non-cmpctblock-building operation passed to handle_cmpct_block_building_operations"
             ),
         }
         Ok(())
@@ -750,6 +898,14 @@ impl Compiler {
         instruction: &Instruction,
     ) -> Result<(), CompilerError> {
         match &instruction.operation {
+            Operation::SendBlockTxn => {
+                let connection_var = self.get_input::<usize>(&instruction.inputs, 0)?;
+                let blocktxn = self
+                    .get_input::<BlockTransactions>(&instruction.inputs, 1)?
+                    .clone();
+                // log::info!("OK {:?}", blocktxn);
+                self.emit_send_message(*connection_var, "blocktxn", &blocktxn);
+            }
             Operation::SendRawMessage => {
                 let connection_var = self.get_input::<usize>(&instruction.inputs, 0)?;
                 let message_type_var = self.get_input::<[char; 12]>(&instruction.inputs, 1)?;
@@ -890,10 +1046,37 @@ impl Compiler {
                 let empty: Vec<u8> = Vec::new();
                 self.emit_send_message(*connection_var, "filterclear", &empty);
             }
+            Operation::SendCompactBlock => {
+                let connection_var = self.get_input::<usize>(&instruction.inputs, 0)?;
+                let compact_block = self.get_input::<CmpctBlock>(&instruction.inputs, 1)?;
+                self.emit_send_message(
+                    *connection_var,
+                    "cmpctblock",
+                    &CmpctBlock {
+                        compact_block: compact_block.compact_block.clone(),
+                    },
+                );
+            }
             _ => unreachable!(
                 "Non-message-sending operation passed to handle_message_sending_operations"
             ),
         }
+        Ok(())
+    }
+
+    fn handle_probe_operations(&mut self, instruction: &Instruction) -> Result<(), CompilerError> {
+        match &instruction.operation {
+            Operation::Probe(op) => match op {
+                ProbeOperation::EnableRecv => {
+                    self.emit_enable_logging_message();
+                }
+                ProbeOperation::DisableRecv => {
+                    self.emit_disable_logging_message();
+                }
+            },
+            _ => unreachable!("Non probing operation passed to handle_probe_operations"),
+        }
+
         Ok(())
     }
 
@@ -996,6 +1179,13 @@ impl Compiler {
             Operation::LoadFilterAdd { data } => {
                 self.handle_load_operation(FilterAdd { data: data.clone() });
             }
+            Operation::LoadNonce(nonce) => self.handle_load_operation(*nonce),
+            Operation::LoadTxIndexes { indexes } => {
+                self.handle_load_operation(indexes.clone());
+            }
+            Operation::LoadBlockTxnRequestVec { vec } => {
+                self.handle_load_operation(vec.clone());
+            }
             _ => unreachable!("Non-load operation passed to handle_load_operations"),
         }
         Ok(())
@@ -1097,6 +1287,14 @@ impl Compiler {
         ));
     }
 
+    fn emit_enable_logging_message(&mut self) {
+        self.output.actions.push(CompiledAction::EnableLogging());
+    }
+
+    fn emit_disable_logging_message(&mut self) {
+        self.output.actions.push(CompiledAction::DisableLogging());
+    }
+
     fn emit_send_message<T: Encodable>(
         &mut self,
         connection_var: usize,
@@ -1147,7 +1345,7 @@ impl Compiler {
                 block.header.nonce += 1;
                 block_hash = block.header.block_hash();
             }
-            log::info!("{:?} height={}", block_hash, header_var.height);
+            // log::info!("{:?} height={}", block_hash, header_var.height);
         } else {
             let target = block.header.target();
             while block.header.validate_pow(target).is_err() {

@@ -18,6 +18,8 @@ pub use minimizers::*;
 pub use mutators::*;
 pub use operation::*;
 
+use serde::{Deserialize, Serialize};
+
 use rand::{RngCore, seq::IteratorRandom};
 pub use variable::*;
 
@@ -220,5 +222,28 @@ impl fmt::Display for Program {
             }
         }
         Ok(())
+    }
+}
+
+/// The runtime data observed during the course of harness execution
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct PerTestcaseMetadata {
+    pub block_tx_request: Vec<compact_block::BlockTransactionsRequestRecved>,
+}
+
+impl PerTestcaseMetadata {
+    pub fn new() -> Self {
+        Self {
+            block_tx_request: Vec::new(),
+        }
+    }
+
+    pub fn block_tx_request(&self) -> &[compact_block::BlockTransactionsRequestRecved] {
+        &self.block_tx_request
+    }
+
+    pub fn add_block_tx_request(&mut self, req: compact_block::BlockTransactionsRequestRecved) {
+        // log::info!("We push req: {:?} to the metadata", req.clone());
+        self.block_tx_request.push(req);
     }
 }

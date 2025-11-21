@@ -1094,6 +1094,7 @@ dependencies = [
 name = "fuzzamoto-libafl"
 version = "0.1.0"
 dependencies = [
+ "bitcoin",
  "clap",
  "env_logger",
  "fuzzamoto",

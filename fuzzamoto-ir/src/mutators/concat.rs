@@ -1,12 +1,17 @@
 use super::{Mutator, MutatorError, MutatorResult, Splicer};
-use crate::{Program, ProgramBuilder};
+use crate::{PerTestcaseMetadata, Program, ProgramBuilder};
 use rand::RngCore;
 
 // `ConcatMutator` takes two programs and concatenates them.
 pub struct ConcatMutator;
 
 impl<R: RngCore> Mutator<R> for ConcatMutator {
-    fn mutate(&mut self, _program: &mut Program, _rng: &mut R) -> MutatorResult {
+    fn mutate(
+        &mut self,
+        _program: &mut Program,
+        _rng: &mut R,
+        _meta: Option<&PerTestcaseMetadata>,
+    ) -> MutatorResult {
         Ok(())
     }
 

@@ -32,6 +32,11 @@ pub enum Variable {
 
     ConstAmount, // bitcoin amount in sats
 
+    MutCmpctBlock,   // compact block still being built
+    ConstCmpctBlock, // compact block that we finished building.
+    Indexes,
+    Nonce,
+
     TxVersion,
     LockTime,
     Sequence,
@@ -49,6 +54,10 @@ pub enum Variable {
     MutFilterLoad, // Mutable filter (under construction)
     ConstFilterLoad,
     FilterAdd,
+
+    BlockTxnRequestVec,
+    BIP152BlockTxReq,
+    BIP152BlockTx,
 
     CoinbaseInput,
     CoinbaseTx,

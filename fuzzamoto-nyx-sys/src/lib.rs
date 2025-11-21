@@ -15,4 +15,5 @@ unsafe extern "C" {
     pub fn nyx_skip();
     pub fn nyx_release();
     pub fn nyx_fail(message: *const c_char);
+    pub fn nyx_println(message: *const c_char, size: usize);
 }

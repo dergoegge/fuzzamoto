@@ -4,6 +4,7 @@ use fuzzamoto_ir::Program;
 
 use libafl::{
     Error,
+    common::HasMetadata,
     corpus::{Corpus, CorpusId, NopCorpus},
     inputs::BytesInput,
     mutators::{HavocScheduledMutator, MutationResult, Mutator, havoc_mutations},
@@ -16,7 +17,7 @@ use libafl_bolts::{
 };
 use rand::RngCore;
 
-use crate::input::IrInput;
+use crate::{feedbacks::recv::RuntimeMetadata, input::IrInput};
 
 /// Instruction limit for mutated IR programs
 const MAX_INSTRUCTIONS: usize = 4096;
@@ -44,15 +45,29 @@ where
 
 impl<S, M, R> Mutator<IrInput, S> for IrMutator<M, R>
 where
-    S: HasRand,
+    S: HasRand + HasMetadata + HasCorpus<IrInput>,
     R: RngCore,
     M: fuzzamoto_ir::Mutator<R>,
 {
-    fn mutate(&mut self, _state: &mut S, input: &mut IrInput) -> Result<MutationResult, Error> {
-        Ok(match self.mutator.mutate(input.ir_mut(), &mut self.rng) {
-            Ok(_) => MutationResult::Mutated,
-            _ => MutationResult::Skipped,
-        })
+    fn mutate(&mut self, state: &mut S, input: &mut IrInput) -> Result<MutationResult, Error> {
+        let rt_data = state
+            .metadata::<RuntimeMetadata>()
+            .expect("RuntimeMetadata should always exist at this point");
+
+        let rt_data = if let Some(id) = state.corpus().current()
+            && let Some(meta) = rt_data.metadata(*id)
+        {
+            Some(meta)
+        } else {
+            None
+        };
+
+        Ok(
+            match self.mutator.mutate(input.ir_mut(), &mut self.rng, rt_data) {
+                Ok(_) => MutationResult::Mutated,
+                _ => MutationResult::Skipped,
+            },
+        )
     }
 
     #[inline]
