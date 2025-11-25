@@ -23,7 +23,11 @@ pub struct BenchmarkCommand;
 impl BenchmarkCommand {
     pub fn execute(cmd: &BenchmarkCommands) -> Result<()> {
         match cmd {
-            BenchmarkCommands::Run { suite, output } => run_suite(suite, output),
+            BenchmarkCommands::Run {
+                suite,
+                output,
+                html,
+            } => run_suite(suite, output, *html),
             BenchmarkCommands::Compare {
                 baseline,
                 candidate,
@@ -41,6 +45,12 @@ pub enum BenchmarkCommands {
         suite: PathBuf,
         #[arg(long, help = "Output directory for run artifacts")]
         output: PathBuf,
+        #[arg(
+            long,
+            default_value_t = false,
+            help = "Also write report.html with plots"
+        )]
+        html: bool,
     },
     /// Compare two benchmark run directories and report deltas
     Compare {
@@ -76,7 +86,7 @@ fn default_bench_snapshot_secs() -> u64 {
     BENCH_SNAPSHOT_SECS
 }
 
-fn run_suite(suite: &PathBuf, output: &PathBuf) -> Result<()> {
+fn run_suite(suite: &PathBuf, output: &PathBuf, write_html: bool) -> Result<()> {
     let mut file = File::open(suite)?;
     let mut buf = Vec::new();
     file.read_to_end(&mut buf)?;
@@ -98,7 +108,7 @@ fn run_suite(suite: &PathBuf, output: &PathBuf) -> Result<()> {
 
     for run_idx in 0..config.runs {
         log::info!("Starting benchmark run {}/{}", run_idx + 1, config.runs);
-        run_single(&config, run_idx, output, suite)?;
+        run_single(&config, run_idx, output, suite, write_html)?;
     }
 
     Ok(())
@@ -109,6 +119,7 @@ fn run_single(
     run_idx: usize,
     root: &Path,
     suite_path: &Path,
+    write_html: bool,
 ) -> Result<()> {
     let run_dir = root.join(format!("run_{run_idx:02}"));
     if run_dir.exists() {
@@ -169,7 +180,14 @@ fn run_single(
         thread::sleep(Duration::from_secs(1));
     }
 
-    aggregate_bench_stats(&run_dir, config, run_idx, suite_path, &fuzzer_path)?;
+    aggregate_bench_stats(
+        &run_dir,
+        config,
+        run_idx,
+        suite_path,
+        &fuzzer_path,
+        write_html,
+    )?;
     write_run_report(&run_dir)?;
 
     Ok(())
@@ -200,6 +218,7 @@ fn aggregate_bench_stats(
     run_idx: usize,
     suite_path: &Path,
     fuzzer_path: &Path,
+    write_html: bool,
 ) -> Result<()> {
     let bench_dir = run_dir.join("out").join("bench");
     if !bench_dir.exists() {
@@ -287,6 +306,9 @@ fn aggregate_bench_stats(
     let summary_path = run_dir.join("summary.json");
     fs::write(summary_path, serde_json::to_vec_pretty(&summary)?)?;
 
+    if write_html {
+        write_run_report_html(run_dir, &merged, &summary)?;
+    }
     Ok(())
 }
 
@@ -681,6 +703,109 @@ fn write_run_report(run_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+fn write_run_report_html(
+    run_dir: &Path,
+    samples: &[(String, BenchSample)],
+    _summary: &BenchSummary,
+) -> Result<()> {
+    if samples.is_empty() {
+        return Ok(());
+    }
+
+    // Group samples per CPU for plotting.
+    let mut by_cpu: HashMap<String, Vec<&BenchSample>> = HashMap::new();
+    for (cpu, sample) in samples {
+        by_cpu.entry(cpu.clone()).or_default().push(sample);
+    }
+
+    #[derive(Serialize)]
+    struct Series {
+        cpu: String,
+        elapsed: Vec<f64>,
+        coverage: Vec<f64>,
+        corpus: Vec<usize>,
+    }
+
+    let mut series: Vec<Series> = Vec::new();
+    for (cpu, samples) in by_cpu {
+        let mut elapsed = Vec::with_capacity(samples.len());
+        let mut coverage = Vec::with_capacity(samples.len());
+        let mut corpus = Vec::with_capacity(samples.len());
+        for s in samples {
+            elapsed.push(s.elapsed_s);
+            coverage.push(s.coverage_pct);
+            corpus.push(s.corpus_size);
+        }
+        series.push(Series {
+            cpu,
+            elapsed,
+            coverage,
+            corpus,
+        });
+    }
+
+    let series_json = serde_json::to_string(&series)?;
+    let html = format!(
+        r#"<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Fuzzamoto Bench Report</title>
+  <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.29.1/plotly.min.js"></script>
+  <style>
+    body {{ font-family: sans-serif; margin: 16px; }}
+    .chart {{ width: 100%; max-width: 1100px; height: 420px; margin-bottom: 28px; }}
+  </style>
+</head>
+<body>
+  <h1>Benchmark Report</h1>
+  <div id="coverage" class="chart"></div>
+  <div id="corpus" class="chart"></div>
+  <script>
+    const series = {series};
+
+    function plotCoverage() {{
+      const traces = series.map(s => ({{
+        x: s.elapsed,
+        y: s.coverage,
+        mode: 'lines',
+        name: s.cpu
+      }}));
+      Plotly.newPlot('coverage', traces, {{
+        title: 'Coverage (%) vs Time',
+        xaxis: {{ title: 'Elapsed (s)' }},
+        yaxis: {{ title: 'Coverage (%)' }},
+        legend: {{ orientation: 'h' }}
+      }});
+    }}
+
+    function plotCorpus() {{
+      const traces = series.map(s => ({{
+        x: s.elapsed,
+        y: s.corpus,
+        mode: 'lines',
+        name: s.cpu
+      }}));
+      Plotly.newPlot('corpus', traces, {{
+        title: 'Corpus Size vs Time',
+        xaxis: {{ title: 'Elapsed (s)' }},
+        yaxis: {{ title: 'Corpus size' }},
+        legend: {{ orientation: 'h' }}
+      }});
+    }}
+
+    plotCoverage();
+    plotCorpus();
+  </script>
+</body>
+</html>
+"#,
+        series = series_json,
+    );
+
+    fs::write(run_dir.join("report.html"), html)?;
+    Ok(())
+}
 fn compare_runs(baseline_dir: &Path, candidate_dir: &Path, output: Option<&Path>) -> Result<()> {
     let baseline = load_summary(baseline_dir)?;
     let candidate = load_summary(candidate_dir)?;
