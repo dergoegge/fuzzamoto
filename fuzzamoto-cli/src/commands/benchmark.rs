@@ -32,7 +32,13 @@ impl BenchmarkCommand {
                 baseline,
                 candidate,
                 output,
-            } => compare_runs(baseline, candidate, output.as_ref().map(PathBuf::as_path)),
+                html,
+            } => compare_runs(
+                baseline,
+                candidate,
+                output.as_ref().map(PathBuf::as_path),
+                *html,
+            ),
         }
     }
 }
@@ -60,6 +66,12 @@ pub enum BenchmarkCommands {
         candidate: PathBuf,
         #[arg(long, help = "Optional path to write a comparison report (Markdown)")]
         output: Option<PathBuf>,
+        #[arg(
+            long,
+            default_value_t = false,
+            help = "Also write compare.html with coverage/corpus charts"
+        )]
+        html: bool,
     },
 }
 
@@ -263,7 +275,7 @@ fn aggregate_suite(root: &Path, write_html: bool) -> Result<()> {
         return Ok(());
     }
 
-    // Bucket samples by elapsed time (ms) and average coverage/corpus.
+    // Bucket samples by elapsed time (ms): round each sample to the nearest ms, group by that key, and average coverage/corpus per bucket.
     #[derive(Default)]
     struct Bucket {
         count: usize,
@@ -984,7 +996,12 @@ fn write_run_report_html(
     fs::write(run_dir.join("report.html"), html)?;
     Ok(())
 }
-fn compare_runs(baseline_dir: &Path, candidate_dir: &Path, output: Option<&Path>) -> Result<()> {
+fn compare_runs(
+    baseline_dir: &Path,
+    candidate_dir: &Path,
+    output: Option<&Path>,
+    write_html: bool,
+) -> Result<()> {
     let baseline = load_summary(baseline_dir)?;
     let candidate = load_summary(candidate_dir)?;
 
@@ -1064,9 +1081,128 @@ fn compare_runs(baseline_dir: &Path, candidate_dir: &Path, output: Option<&Path>
         print!("{report}");
     }
 
+    if write_html {
+        write_compare_report_html(baseline_dir, candidate_dir)?;
+    }
+
     Ok(())
 }
 
+/// Write an HTML comparison plotting coverage and corpus per CPU for baseline vs candidate.
+fn write_compare_report_html(baseline_dir: &Path, candidate_dir: &Path) -> Result<()> {
+    #[derive(Serialize)]
+    struct Series {
+        cpu: String,
+        elapsed: Vec<f64>,
+        coverage: Vec<f64>,
+        corpus: Vec<usize>,
+    }
+
+    fn parse_series(contents: &str) -> Vec<Series> {
+        let mut by_cpu: HashMap<String, Vec<(f64, f64, usize)>> = HashMap::new();
+        for (idx, line) in contents.lines().enumerate() {
+            if idx == 0 {
+                continue;
+            }
+            let parts: Vec<_> = line.split(',').collect();
+            if parts.len() < 7 {
+                continue;
+            }
+            let cpu = parts[0].to_string();
+            let Ok(elapsed_s) = parts[1].parse() else {
+                continue;
+            };
+            let Ok(coverage_pct) = parts[4].parse() else {
+                continue;
+            };
+            let Ok(corpus_size) = parts[5].parse() else {
+                continue;
+            };
+            by_cpu
+                .entry(cpu)
+                .or_default()
+                .push((elapsed_s, coverage_pct, corpus_size));
+        }
+        let mut out = Vec::new();
+        for (cpu, mut samples) in by_cpu {
+            samples.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+            let mut elapsed = Vec::with_capacity(samples.len());
+            let mut coverage = Vec::with_capacity(samples.len());
+            let mut corpus = Vec::with_capacity(samples.len());
+            for (e, c, cor) in samples {
+                elapsed.push(e);
+                coverage.push(c);
+                corpus.push(cor);
+            }
+            out.push(Series {
+                cpu,
+                elapsed,
+                coverage,
+                corpus,
+            });
+        }
+        out
+    }
+
+    let base_stats = fs::read_to_string(baseline_dir.join("stats.csv"))?;
+    let cand_stats = fs::read_to_string(candidate_dir.join("stats.csv"))?;
+
+    let base_series = serde_json::to_string(&parse_series(&base_stats))?;
+    let cand_series = serde_json::to_string(&parse_series(&cand_stats))?;
+
+    let html = format!(
+        r#"<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Benchmark Compare</title>
+  <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.29.1/plotly.min.js"></script>
+  <style>
+    body {{ font-family: sans-serif; margin: 16px; }}
+    .chart {{ width: 100%; max-width: 1100px; height: 420px; margin-bottom: 28px; }}
+  </style>
+</head>
+<body>
+  <h1>Benchmark Compare</h1>
+  <div id="cov_base" class="chart"></div>
+  <div id="cov_cand" class="chart"></div>
+  <div id="corpus_base" class="chart"></div>
+  <div id="corpus_cand" class="chart"></div>
+  <script>
+    const base = {base};
+    const cand = {cand};
+
+    function plot(series, div, title, field) {{
+      const traces = series.map(s => ({{
+        x: s.elapsed,
+        y: s[field],
+        mode: 'lines',
+        name: s.cpu
+      }}));
+      Plotly.newPlot(div, traces, {{
+        title,
+        xaxis: {{ title: 'Elapsed (s)' }},
+        yaxis: {{ title: field === 'coverage' ? 'Coverage (%)' : 'Corpus size' }},
+        legend: {{ orientation: 'h' }}
+      }});
+    }}
+
+    plot(base, 'cov_base', 'Baseline: Coverage vs Time', 'coverage');
+    plot(cand, 'cov_cand', 'Candidate: Coverage vs Time', 'coverage');
+    plot(base, 'corpus_base', 'Baseline: Corpus vs Time', 'corpus');
+    plot(cand, 'corpus_cand', 'Candidate: Corpus vs Time', 'corpus');
+  </script>
+</body>
+</html>
+"#,
+        base = base_series,
+        cand = cand_series
+    );
+
+    let out_dir = baseline_dir.parent().unwrap_or_else(|| Path::new("."));
+    fs::write(out_dir.join("compare.html"), html)?;
+    Ok(())
+}
 fn load_summary(run_dir: &Path) -> Result<BenchSummary> {
     let summary_path = run_dir.join("summary.json");
     if !summary_path.exists() {
