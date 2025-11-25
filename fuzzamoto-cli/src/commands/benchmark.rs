@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     ffi::OsStr,
     fmt::Write,
     fs::{self, File},
@@ -111,6 +111,7 @@ fn run_suite(suite: &PathBuf, output: &PathBuf, write_html: bool) -> Result<()> 
         run_single(&config, run_idx, output, suite, write_html)?;
     }
 
+    aggregate_suite(output, write_html)?;
     Ok(())
 }
 
@@ -190,6 +191,183 @@ fn run_single(
     )?;
     write_run_report(&run_dir)?;
 
+    Ok(())
+}
+
+/// Aggregate all run_* outputs into suite-level stats and optional HTML.
+fn aggregate_suite(root: &Path, write_html: bool) -> Result<()> {
+    let mut run_dirs: Vec<PathBuf> = fs::read_dir(root)?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .map_or(false, |n| n.starts_with("run_"))
+        })
+        .collect();
+
+    run_dirs.sort();
+    if run_dirs.is_empty() {
+        return Ok(());
+    }
+
+    let mut suite_samples: HashMap<String, Vec<BenchSample>> = HashMap::new();
+
+    // Merge per-CPU samples across runs.
+    for run in &run_dirs {
+        let stats_path = run.join("stats.csv");
+        if !stats_path.exists() {
+            continue;
+        }
+        let contents = fs::read_to_string(&stats_path)?;
+        for (idx, line) in contents.lines().enumerate() {
+            if idx == 0 {
+                continue;
+            }
+            let parts: Vec<_> = line.split(',').collect();
+            if parts.len() < 7 {
+                continue;
+            }
+            let cpu = parts[0].to_string();
+            let Ok(elapsed_s) = parts[1].parse() else {
+                continue;
+            };
+            let Ok(execs) = parts[2].parse() else {
+                continue;
+            };
+            let Ok(execs_per_sec) = parts[3].parse() else {
+                continue;
+            };
+            let Ok(coverage_pct) = parts[4].parse() else {
+                continue;
+            };
+            let Ok(corpus_size) = parts[5].parse() else {
+                continue;
+            };
+            let Ok(crashes) = parts[6].parse() else {
+                continue;
+            };
+
+            suite_samples.entry(cpu).or_default().push(BenchSample {
+                elapsed_s,
+                execs,
+                execs_per_sec,
+                coverage_pct,
+                corpus_size,
+                crashes,
+            });
+        }
+    }
+
+    if suite_samples.is_empty() {
+        return Ok(());
+    }
+
+    // Bucket samples by elapsed time (ms) and average coverage/corpus.
+    #[derive(Default)]
+    struct Bucket {
+        count: usize,
+        coverage_sum: f64,
+        corpus_sum: f64,
+    }
+    let mut buckets: BTreeMap<u64, Bucket> = BTreeMap::new();
+    for series in suite_samples.values() {
+        for s in series {
+            let key = (s.elapsed_s * 1000.0).round() as u64;
+            let entry = buckets.entry(key).or_default();
+            entry.count += 1;
+            entry.coverage_sum += s.coverage_pct;
+            entry.corpus_sum += s.corpus_size as f64;
+        }
+    }
+
+    #[derive(Serialize)]
+    struct SuiteSeries {
+        elapsed: Vec<f64>,
+        coverage_mean: Vec<f64>,
+        corpus_mean: Vec<f64>,
+    }
+
+    let mut suite_series = SuiteSeries {
+        elapsed: Vec::with_capacity(buckets.len()),
+        coverage_mean: Vec::with_capacity(buckets.len()),
+        corpus_mean: Vec::with_capacity(buckets.len()),
+    };
+    for (k, v) in buckets {
+        if v.count == 0 {
+            continue;
+        }
+        suite_series.elapsed.push(k as f64 / 1000.0);
+        suite_series
+            .coverage_mean
+            .push(v.coverage_sum / v.count as f64);
+        suite_series.corpus_mean.push(v.corpus_sum / v.count as f64);
+    }
+
+    let suite_json = serde_json::to_string(&suite_series)?;
+    if write_html {
+        write_suite_report_html(root, &suite_json)?;
+    }
+
+    Ok(())
+}
+
+fn write_suite_report_html(root: &Path, suite_series_json: &str) -> Result<()> {
+    let html = format!(
+        r#"<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Fuzzamoto Bench Suite Report</title>
+  <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.29.1/plotly.min.js"></script>
+  <style>
+    body {{ font-family: sans-serif; margin: 16px; }}
+    .chart {{ width: 100%; max-width: 1100px; height: 420px; margin-bottom: 28px; }}
+  </style>
+</head>
+<body>
+  <h1>Suite Report</h1>
+  <div id="suite_coverage" class="chart"></div>
+  <div id="suite_corpus" class="chart"></div>
+  <script>
+    const suite = {suite};
+
+    function plotSuiteCoverage() {{
+      Plotly.newPlot('suite_coverage', [{{
+        x: suite.elapsed,
+        y: suite.coverage_mean,
+        mode: 'lines',
+        name: 'mean coverage'
+      }}], {{
+        title: 'Coverage (%) vs Time (mean across runs)',
+        xaxis: {{ title: 'Elapsed (s)' }},
+        yaxis: {{ title: 'Coverage (%)' }}
+      }});
+    }}
+
+    function plotSuiteCorpus() {{
+      Plotly.newPlot('suite_corpus', [{{
+        x: suite.elapsed,
+        y: suite.corpus_mean,
+        mode: 'lines',
+        name: 'mean corpus size'
+      }}], {{
+        title: 'Corpus Size vs Time (mean across runs)',
+        xaxis: {{ title: 'Elapsed (s)' }},
+        yaxis: {{ title: 'Corpus size' }}
+      }});
+    }}
+
+    plotSuiteCoverage();
+    plotSuiteCorpus();
+  </script>
+</body>
+</html>
+"#,
+        suite = suite_series_json
+    );
+
+    fs::write(root.join("suite_report.html"), html)?;
     Ok(())
 }
 
