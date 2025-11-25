@@ -33,11 +33,13 @@ impl BenchmarkCommand {
                 candidate,
                 output,
                 html,
+                suite,
             } => compare_runs(
                 baseline,
                 candidate,
                 output.as_ref().map(PathBuf::as_path),
                 *html,
+                *suite,
             ),
         }
     }
@@ -72,6 +74,12 @@ pub enum BenchmarkCommands {
             help = "Also write compare.html with coverage/corpus charts"
         )]
         html: bool,
+        #[arg(
+            long,
+            default_value_t = false,
+            help = "Treat baseline/candidate as suite roots (compare mean curves across run_*)"
+        )]
+        suite: bool,
     },
 }
 
@@ -1001,6 +1009,7 @@ fn compare_runs(
     candidate_dir: &Path,
     output: Option<&Path>,
     write_html: bool,
+    suite_level: bool,
 ) -> Result<()> {
     let baseline = load_summary(baseline_dir)?;
     let candidate = load_summary(candidate_dir)?;
@@ -1082,7 +1091,11 @@ fn compare_runs(
     }
 
     if write_html {
-        write_compare_report_html(baseline_dir, candidate_dir)?;
+        if suite_level {
+            write_compare_suite_html(baseline_dir, candidate_dir)?;
+        } else {
+            write_compare_report_html(baseline_dir, candidate_dir)?;
+        }
     }
 
     Ok(())
@@ -1200,6 +1213,166 @@ fn write_compare_report_html(baseline_dir: &Path, candidate_dir: &Path) -> Resul
     );
 
     let out_dir = baseline_dir.parent().unwrap_or_else(|| Path::new("."));
+    fs::write(out_dir.join("compare.html"), html)?;
+    Ok(())
+}
+
+/// Compare two suite roots by averaging their run_* stats and plotting mean coverage/corpus.
+fn write_compare_suite_html(baseline_root: &Path, candidate_root: &Path) -> Result<()> {
+    let suite_json = |root: &Path| -> Result<String> {
+        // Reuse suite aggregation logic: load stats.csv files under run_* and bucket means.
+        let mut suite_samples: HashMap<String, Vec<BenchSample>> = HashMap::new();
+        for entry in fs::read_dir(root)? {
+            let entry = entry?;
+            let path = entry.path();
+            if !path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map_or(false, |n| n.starts_with("run_"))
+            {
+                continue;
+            }
+            let stats_path = path.join("stats.csv");
+            if !stats_path.exists() {
+                continue;
+            }
+            let contents = fs::read_to_string(&stats_path)?;
+            for (idx, line) in contents.lines().enumerate() {
+                if idx == 0 {
+                    continue;
+                }
+                let parts: Vec<_> = line.split(',').collect();
+                if parts.len() < 7 {
+                    continue;
+                }
+                let cpu = parts[0].to_string();
+                let Ok(elapsed_s) = parts[1].parse() else {
+                    continue;
+                };
+                let Ok(execs) = parts[2].parse() else {
+                    continue;
+                };
+                let Ok(execs_per_sec) = parts[3].parse() else {
+                    continue;
+                };
+                let Ok(coverage_pct) = parts[4].parse() else {
+                    continue;
+                };
+                let Ok(corpus_size) = parts[5].parse() else {
+                    continue;
+                };
+                let Ok(crashes) = parts[6].parse() else {
+                    continue;
+                };
+                suite_samples.entry(cpu).or_default().push(BenchSample {
+                    elapsed_s,
+                    execs,
+                    execs_per_sec,
+                    coverage_pct,
+                    corpus_size,
+                    crashes,
+                });
+            }
+        }
+
+        #[derive(Default)]
+        struct Bucket {
+            count: usize,
+            coverage_sum: f64,
+            corpus_sum: f64,
+        }
+        let mut buckets: BTreeMap<u64, Bucket> = BTreeMap::new();
+        for series in suite_samples.values() {
+            for s in series {
+                let key = (s.elapsed_s * 1000.0).round() as u64;
+                let entry = buckets.entry(key).or_default();
+                entry.count += 1;
+                entry.coverage_sum += s.coverage_pct;
+                entry.corpus_sum += s.corpus_size as f64;
+            }
+        }
+
+        #[derive(Serialize)]
+        struct SuiteSeries {
+            elapsed: Vec<f64>,
+            coverage_mean: Vec<f64>,
+            corpus_mean: Vec<f64>,
+        }
+
+        let mut suite_series = SuiteSeries {
+            elapsed: Vec::with_capacity(buckets.len()),
+            coverage_mean: Vec::with_capacity(buckets.len()),
+            corpus_mean: Vec::with_capacity(buckets.len()),
+        };
+        for (k, v) in buckets {
+            if v.count == 0 {
+                continue;
+            }
+            suite_series.elapsed.push(k as f64 / 1000.0);
+            suite_series
+                .coverage_mean
+                .push(v.coverage_sum / v.count as f64);
+            suite_series.corpus_mean.push(v.corpus_sum / v.count as f64);
+        }
+        Ok(serde_json::to_string(&suite_series)?)
+    };
+
+    let base_json = suite_json(baseline_root)?;
+    let cand_json = suite_json(candidate_root)?;
+
+    let html = format!(
+        r#"<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Benchmark Suite Compare</title>
+  <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.29.1/plotly.min.js"></script>
+  <style>
+    body {{ font-family: sans-serif; margin: 16px; }}
+    .chart {{ width: 100%; max-width: 1100px; height: 420px; margin-bottom: 28px; }}
+  </style>
+</head>
+<body>
+  <h1>Suite Compare</h1>
+  <div id="cov" class="chart"></div>
+  <div id="corpus" class="chart"></div>
+  <script>
+    const base = {base};
+    const cand = {cand};
+
+    function plot(div, field, title, yTitle) {{
+      Plotly.newPlot(div, [
+        {{
+          x: base.elapsed,
+          y: base[field],
+          mode: 'lines',
+          name: 'baseline'
+        }},
+        {{
+          x: cand.elapsed,
+          y: cand[field],
+          mode: 'lines',
+          name: 'candidate'
+        }}
+      ], {{
+        title,
+        xaxis: {{ title: 'Elapsed (s)' }},
+        yaxis: {{ title: yTitle }},
+        legend: {{ orientation: 'h' }}
+      }});
+    }}
+
+    plot('cov', 'coverage_mean', 'Coverage vs Time (mean across runs)', 'Coverage (%)');
+    plot('corpus', 'corpus_mean', 'Corpus vs Time (mean across runs)', 'Corpus size');
+  </script>
+</body>
+</html>
+"#,
+        base = base_json,
+        cand = cand_json
+    );
+
+    let out_dir = baseline_root.parent().unwrap_or_else(|| Path::new("."));
     fs::write(out_dir.join("compare.html"), html)?;
     Ok(())
 }
