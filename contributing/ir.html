@@ -144,6 +144,63 @@
                 <div id="content" class="content">
                     <main>
                         <h1 id="extending-fuzzamoto-ir"><a class="header" href="#extending-fuzzamoto-ir">Extending Fuzzamoto IR</a></h1>
+<p>This guide explains how to add a new IR primitive end to end. Refer to the <a href="https://dergoegge.github.io/fuzzamoto/design/ir.html">IR
+docs</a> for a high level
+design overview.</p>
+<h2 id="model-the-primitive"><a class="header" href="#model-the-primitive">Model the primitive</a></h2>
+<ul>
+<li>Add new variable types in <code>fuzzamoto-ir/src/variable.rs</code>.</li>
+<li>Teach <code>fuzzamoto-ir/src/operation.rs</code> about the operation: specify its type
+signature (<code>get_input_variables</code>, <code>get_output_variables</code>,
+<code>get_inner_output_variables</code>), scope rules (<code>is_block_begin</code>, <code>is_block_end</code>,
+<code>is_matching_block_begin</code>, <code>allow_insertion_in_block</code>), and
+mutation/minimization behaviour (<code>is_operation_mutable</code>, <code>mutates_nth_input</code>,
+<code>is_noppable</code>).</li>
+<li>Update <code>fuzzamoto-ir/src/instruction.rs</code> so the builder and mutators can spot
+context changes (<code>entered_context_after_execution</code>) and know whether the
+operation can be mutated or nopped out.</li>
+</ul>
+<h2 id="snapshot-context--scenario"><a class="header" href="#snapshot-context--scenario">Snapshot context &amp; scenario</a></h2>
+<ul>
+<li>If the new instruction needs extra snapshot data, extend <code>FullProgramContext</code>
+in <code>fuzzamoto-ir/src/lib.rs</code>.</li>
+<li>Populate that data inside the IR scenario by extending the relevant helpers in
+<code>fuzzamoto-scenarios/bin/ir.rs</code> (<code>build_*</code>, <code>dump_context</code>, etc.).</li>
+<li>Whenever context data changes, re-run <code>scenario-ir</code> to refresh <code>ir.context</code>
+for generators and tests.</li>
+</ul>
+<h2 id="compiler"><a class="header" href="#compiler">Compiler</a></h2>
+<ul>
+<li>Update <code>fuzzamoto-ir/src/compiler.rs</code> so the new operations lower into the
+appropriate <code>CompiledAction</code>s. Make use of consensus encoders from <code>bitcoin</code>
+where possible.</li>
+<li>Add focused unit tests in the same file that compile a tiny program and assert
+on the serialized bytes.</li>
+</ul>
+<h2 id="generators--mutators"><a class="header" href="#generators--mutators">Generators &amp; mutators</a></h2>
+<ul>
+<li>Implement a generator under <code>fuzzamoto-ir/src/generators/</code> that emits the new
+instructions in a valid SSA context.</li>
+<li>Export it via <code>generators/mod.rs</code> and wire it into:
+<ul>
+<li><code>fuzzamoto-libafl/src/instance.rs</code> so LibAFL schedules it.</li>
+<li><code>fuzzamoto-cli/src/commands/ir.rs</code> so <code>ir generate --generators</code> can use
+it.</li>
+</ul>
+</li>
+</ul>
+<h2 id="examples"><a class="header" href="#examples">Examples</a></h2>
+<p>A few PRs that show how IR primitives were added end-to-end:</p>
+<ul>
+<li><a href="https://github.com/dergoegge/fuzzamoto/pull/28">PR #28 - fuzzamoto-ir: Add support for compact block inventory
+items</a></li>
+<li><a href="https://github.com/dergoegge/fuzzamoto/pull/46">PR #46 - fuzzamoto-ir/libafl: Expand IR with addr relay (v1&amp;v2)
+primitives</a></li>
+<li><a href="https://github.com/dergoegge/fuzzamoto/pull/45">PR #45 - Add filterload, filteradd, filterclear handling to
+fuzzamoto-ir</a></li>
+<li><a href="https://github.com/dergoegge/fuzzamoto/pull/38">PR #38 - fuzzamoto-ir: add
+CoinbaseTxGenerator</a></li>
+</ul>
 
                     </main>
 
