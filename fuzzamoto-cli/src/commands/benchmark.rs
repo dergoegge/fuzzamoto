@@ -216,114 +216,13 @@ fn run_single(
 
 /// Aggregate all run_* outputs into suite-level stats and optional HTML.
 fn aggregate_suite(root: &Path, write_html: bool) -> Result<()> {
-    let mut run_dirs: Vec<PathBuf> = fs::read_dir(root)?
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .filter(|p| {
-            p.file_name()
-                .and_then(|n| n.to_str())
-                .map_or(false, |n| n.starts_with("run_"))
-        })
-        .collect();
-
-    run_dirs.sort();
-    if run_dirs.is_empty() {
-        return Ok(());
-    }
-
-    let mut suite_samples: HashMap<String, Vec<BenchSample>> = HashMap::new();
-
-    // Merge per-CPU samples across runs.
-    for run in &run_dirs {
-        let stats_path = run.join("stats.csv");
-        if !stats_path.exists() {
-            continue;
-        }
-        let contents = fs::read_to_string(&stats_path)?;
-        for (idx, line) in contents.lines().enumerate() {
-            if idx == 0 {
-                continue;
-            }
-            let parts: Vec<_> = line.split(',').collect();
-            if parts.len() < 7 {
-                continue;
-            }
-            let cpu = parts[0].to_string();
-            let Ok(elapsed_s) = parts[1].parse() else {
-                continue;
-            };
-            let Ok(execs) = parts[2].parse() else {
-                continue;
-            };
-            let Ok(execs_per_sec) = parts[3].parse() else {
-                continue;
-            };
-            let Ok(coverage_pct) = parts[4].parse() else {
-                continue;
-            };
-            let Ok(corpus_size) = parts[5].parse() else {
-                continue;
-            };
-            let Ok(crashes) = parts[6].parse() else {
-                continue;
-            };
-
-            suite_samples.entry(cpu).or_default().push(BenchSample {
-                elapsed_s,
-                execs,
-                execs_per_sec,
-                coverage_pct,
-                corpus_size,
-                crashes,
-            });
-        }
-    }
+    let suite_samples = load_suite_samples(root)?;
 
     if suite_samples.is_empty() {
         return Ok(());
     }
 
-    // Bucket samples by elapsed time (ms): round each sample to the nearest ms, group by that key, and average coverage/corpus per bucket.
-    #[derive(Default)]
-    struct Bucket {
-        count: usize,
-        coverage_sum: f64,
-        corpus_sum: f64,
-    }
-    let mut buckets: BTreeMap<u64, Bucket> = BTreeMap::new();
-    for series in suite_samples.values() {
-        for s in series {
-            let key = (s.elapsed_s * 1000.0).round() as u64;
-            let entry = buckets.entry(key).or_default();
-            entry.count += 1;
-            entry.coverage_sum += s.coverage_pct;
-            entry.corpus_sum += s.corpus_size as f64;
-        }
-    }
-
-    #[derive(Serialize)]
-    struct SuiteSeries {
-        elapsed: Vec<f64>,
-        coverage_mean: Vec<f64>,
-        corpus_mean: Vec<f64>,
-    }
-
-    let mut suite_series = SuiteSeries {
-        elapsed: Vec::with_capacity(buckets.len()),
-        coverage_mean: Vec::with_capacity(buckets.len()),
-        corpus_mean: Vec::with_capacity(buckets.len()),
-    };
-    for (k, v) in buckets {
-        if v.count == 0 {
-            continue;
-        }
-        suite_series.elapsed.push(k as f64 / 1000.0);
-        suite_series
-            .coverage_mean
-            .push(v.coverage_sum / v.count as f64);
-        suite_series.corpus_mean.push(v.corpus_sum / v.count as f64);
-    }
-
+    let suite_series = bucket_mean_series(&suite_samples);
     let suite_json = serde_json::to_string(&suite_series)?;
     if write_html {
         write_suite_report_html(root, &suite_json)?;
@@ -333,59 +232,22 @@ fn aggregate_suite(root: &Path, write_html: bool) -> Result<()> {
 }
 
 fn write_suite_report_html(root: &Path, suite_series_json: &str) -> Result<()> {
-    let html = format!(
-        r#"<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <title>Fuzzamoto Bench Suite Report</title>
-  <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.29.1/plotly.min.js"></script>
-  <style>
-    body {{ font-family: sans-serif; margin: 16px; }}
-    .chart {{ width: 100%; max-width: 1100px; height: 420px; margin-bottom: 28px; }}
-  </style>
-</head>
-<body>
-  <h1>Suite Report</h1>
-  <div id="suite_coverage" class="chart"></div>
-  <div id="suite_corpus" class="chart"></div>
-  <script>
-    const suite = {suite};
-
-    function plotSuiteCoverage() {{
-      Plotly.newPlot('suite_coverage', [{{
-        x: suite.elapsed,
-        y: suite.coverage_mean,
-        mode: 'lines',
-        name: 'mean coverage'
-      }}], {{
-        title: 'Coverage (%) vs Time (mean across runs)',
-        xaxis: {{ title: 'Elapsed (s)' }},
-        yaxis: {{ title: 'Coverage (%)' }}
-      }});
-    }}
-
-    function plotSuiteCorpus() {{
-      Plotly.newPlot('suite_corpus', [{{
-        x: suite.elapsed,
-        y: suite.corpus_mean,
-        mode: 'lines',
-        name: 'mean corpus size'
-      }}], {{
-        title: 'Corpus Size vs Time (mean across runs)',
-        xaxis: {{ title: 'Elapsed (s)' }},
-        yaxis: {{ title: 'Corpus size' }}
-      }});
-    }}
-
-    plotSuiteCoverage();
-    plotSuiteCorpus();
-  </script>
-</body>
-</html>
-"#,
-        suite = suite_series_json
-    );
+    // Reuse multi-series renderer with two charts (coverage/corpus means).
+    let charts = [
+        ChartSpec {
+            div_id: "suite_coverage",
+            title: "Coverage (%) vs Time (mean across runs)",
+            y_title: "Coverage (%)",
+            field: "coverage_mean",
+        },
+        ChartSpec {
+            div_id: "suite_corpus",
+            title: "Corpus Size vs Time (mean across runs)",
+            y_title: "Corpus size",
+            field: "corpus_mean",
+        },
+    ];
+    let html = render_multi_series("Fuzzamoto Bench Suite Report", suite_series_json, &charts);
 
     fs::write(root.join("suite_report.html"), html)?;
     Ok(())
@@ -815,6 +677,259 @@ struct ChainStat {
     share_pct: f64,
 }
 
+/// Per-CPU time series extracted from stats.csv for plotting.
+#[derive(Serialize)]
+struct CpuSeries {
+    cpu: String,
+    elapsed: Vec<f64>,
+    coverage: Vec<f64>,
+    corpus: Vec<usize>,
+}
+
+/// Aggregation bucket for averaging across runs at a given elapsed time.
+#[derive(Default)]
+struct Bucket {
+    count: usize,
+    coverage_sum: f64,
+    corpus_sum: f64,
+}
+
+/// Mean coverage/corpus curves across runs, time-bucketed.
+#[derive(Serialize)]
+struct SuiteSeries {
+    elapsed: Vec<f64>,
+    coverage_mean: Vec<f64>,
+    corpus_mean: Vec<f64>,
+}
+
+/// Parse a merged stats.csv string (with cpu column) into per-CPU series.
+fn parse_stats_series(contents: &str) -> Vec<CpuSeries> {
+    let mut by_cpu: HashMap<String, Vec<(f64, f64, usize)>> = HashMap::new();
+    for (idx, line) in contents.lines().enumerate() {
+        if idx == 0 {
+            continue;
+        }
+        let parts: Vec<_> = line.split(',').collect();
+        if parts.len() < 7 {
+            continue;
+        }
+        let cpu = parts[0].to_string();
+        let Ok(elapsed_s) = parts[1].parse() else {
+            continue;
+        };
+        let Ok(coverage_pct) = parts[4].parse() else {
+            continue;
+        };
+        let Ok(corpus_size) = parts[5].parse() else {
+            continue;
+        };
+        by_cpu
+            .entry(cpu)
+            .or_default()
+            .push((elapsed_s, coverage_pct, corpus_size));
+    }
+    let mut out = Vec::new();
+    for (cpu, mut samples) in by_cpu {
+        samples.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        let mut elapsed = Vec::with_capacity(samples.len());
+        let mut coverage = Vec::with_capacity(samples.len());
+        let mut corpus = Vec::with_capacity(samples.len());
+        for (e, c, cor) in samples {
+            elapsed.push(e);
+            coverage.push(c);
+            corpus.push(cor);
+        }
+        out.push(CpuSeries {
+            cpu,
+            elapsed,
+            coverage,
+            corpus,
+        });
+    }
+    out
+}
+
+/// Group per-CPU series from merged samples (cpu, BenchSample).
+fn group_samples_by_cpu(samples: &[(String, BenchSample)]) -> Vec<CpuSeries> {
+    let mut by_cpu: HashMap<String, Vec<&BenchSample>> = HashMap::new();
+    for (cpu, sample) in samples {
+        by_cpu.entry(cpu.clone()).or_default().push(sample);
+    }
+
+    let mut series: Vec<CpuSeries> = Vec::new();
+    for (cpu, samples) in by_cpu {
+        let mut elapsed = Vec::with_capacity(samples.len());
+        let mut coverage = Vec::with_capacity(samples.len());
+        let mut corpus = Vec::with_capacity(samples.len());
+        for s in samples {
+            elapsed.push(s.elapsed_s);
+            coverage.push(s.coverage_pct);
+            corpus.push(s.corpus_size);
+        }
+        series.push(CpuSeries {
+            cpu,
+            elapsed,
+            coverage,
+            corpus,
+        });
+    }
+    series
+}
+
+/// Load all run_* stats.csv files under a suite root and return per-CPU samples.
+fn load_suite_samples(root: &Path) -> Result<Vec<(String, BenchSample)>> {
+    let mut suite_samples: Vec<(String, BenchSample)> = Vec::new();
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        let path = entry.path();
+        if !path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map_or(false, |n| n.starts_with("run_"))
+        {
+            continue;
+        }
+        let stats_path = path.join("stats.csv");
+        if !stats_path.exists() {
+            continue;
+        }
+        let contents = fs::read_to_string(&stats_path)?;
+        for (idx, line) in contents.lines().enumerate() {
+            if idx == 0 {
+                continue;
+            }
+            let parts: Vec<_> = line.split(',').collect();
+            if parts.len() < 7 {
+                continue;
+            }
+            let cpu = parts[0].to_string();
+            let Ok(elapsed_s) = parts[1].parse() else {
+                continue;
+            };
+            let Ok(execs) = parts[2].parse() else {
+                continue;
+            };
+            let Ok(execs_per_sec) = parts[3].parse() else {
+                continue;
+            };
+            let Ok(coverage_pct) = parts[4].parse() else {
+                continue;
+            };
+            let Ok(corpus_size) = parts[5].parse() else {
+                continue;
+            };
+            let Ok(crashes) = parts[6].parse() else {
+                continue;
+            };
+            suite_samples.push((
+                cpu,
+                BenchSample {
+                    elapsed_s,
+                    execs,
+                    execs_per_sec,
+                    coverage_pct,
+                    corpus_size,
+                    crashes,
+                },
+            ));
+        }
+    }
+    Ok(suite_samples)
+}
+
+/// Bucket samples by elapsed time (ms): round each sample to the nearest ms, group by that key, and average coverage/corpus per bucket.
+fn bucket_mean_series(samples: &[(String, BenchSample)]) -> SuiteSeries {
+    let mut buckets: BTreeMap<u64, Bucket> = BTreeMap::new();
+    for (_cpu, s) in samples {
+        let key = (s.elapsed_s * 1000.0).round() as u64;
+        let entry = buckets.entry(key).or_default();
+        entry.count += 1;
+        entry.coverage_sum += s.coverage_pct;
+        entry.corpus_sum += s.corpus_size as f64;
+    }
+
+    let mut suite_series = SuiteSeries {
+        elapsed: Vec::with_capacity(buckets.len()),
+        coverage_mean: Vec::with_capacity(buckets.len()),
+        corpus_mean: Vec::with_capacity(buckets.len()),
+    };
+    for (k, v) in buckets {
+        if v.count == 0 {
+            continue;
+        }
+        suite_series.elapsed.push(k as f64 / 1000.0);
+        suite_series
+            .coverage_mean
+            .push(v.coverage_sum / v.count as f64);
+        suite_series.corpus_mean.push(v.corpus_sum / v.count as f64);
+    }
+    suite_series
+}
+
+fn render_compare_series(
+    title: &str,
+    base_series_json: &str,
+    cand_series_json: &str,
+    coverage_title: &str,
+    corpus_title: &str,
+) -> String {
+    // Compare two sets of Series: plots baseline vs candidate coverage/corpus.
+    format!(
+        r#"<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>{title}</title>
+  <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.29.1/plotly.min.js"></script>
+  <style>
+    body {{ font-family: sans-serif; margin: 16px; }}
+    .chart {{ width: 100%; max-width: 1100px; height: 420px; margin-bottom: 28px; }}
+  </style>
+</head>
+<body>
+  <h1>{title}</h1>
+  <div id="cov" class="chart"></div>
+  <div id="corpus" class="chart"></div>
+  <script>
+    const base = {base};
+    const cand = {cand};
+
+    function plot(div, field, plotTitle, yTitle) {{
+      Plotly.newPlot(div, [
+        {{
+          x: base.elapsed,
+          y: base[field],
+          mode: 'lines',
+          name: 'baseline'
+        }},
+        {{
+          x: cand.elapsed,
+          y: cand[field],
+          mode: 'lines',
+          name: 'candidate'
+        }}
+      ], {{
+        title: plotTitle,
+        xaxis: {{ title: 'Elapsed (s)' }},
+        yaxis: {{ title: yTitle }},
+        legend: {{ orientation: 'h' }}
+      }});
+    }}
+
+    plot('cov', 'coverage_mean', '{cov_title}', 'Coverage (%)');
+    plot('corpus', 'corpus_mean', '{corpus_title}', 'Corpus size');
+  </script>
+</body>
+</html>
+"#,
+        title = title,
+        base = base_series_json,
+        cand = cand_series_json,
+        cov_title = coverage_title,
+        corpus_title = corpus_title
+    )
+}
+
 fn write_run_report(run_dir: &Path) -> Result<()> {
     let summary_path = run_dir.join("summary.json");
     if !summary_path.exists() {
@@ -910,45 +1025,79 @@ fn write_run_report_html(
         return Ok(());
     }
 
-    // Group samples per CPU for plotting.
-    let mut by_cpu: HashMap<String, Vec<&BenchSample>> = HashMap::new();
-    for (cpu, sample) in samples {
-        by_cpu.entry(cpu.clone()).or_default().push(sample);
-    }
+    let series_json = serde_json::to_string(&group_samples_by_cpu(samples))?;
+    fs::write(
+        run_dir.join("report.html"),
+        render_multi_series(
+            "Fuzzamoto Bench Report",
+            &series_json,
+            &[
+                ChartSpec {
+                    div_id: "coverage",
+                    title: "Coverage (%) vs Time",
+                    y_title: "Coverage (%)",
+                    field: "coverage",
+                },
+                ChartSpec {
+                    div_id: "corpus",
+                    title: "Corpus Size vs Time",
+                    y_title: "Corpus size",
+                    field: "corpus",
+                },
+            ],
+        ),
+    )?;
+    Ok(())
+}
 
-    #[derive(Serialize)]
-    struct Series {
-        cpu: String,
-        elapsed: Vec<f64>,
-        coverage: Vec<f64>,
-        corpus: Vec<usize>,
-    }
+struct ChartSpec {
+    div_id: &'static str,
+    title: &'static str,
+    y_title: &'static str,
+    field: &'static str,
+}
 
-    let mut series: Vec<Series> = Vec::new();
-    for (cpu, samples) in by_cpu {
-        let mut elapsed = Vec::with_capacity(samples.len());
-        let mut coverage = Vec::with_capacity(samples.len());
-        let mut corpus = Vec::with_capacity(samples.len());
-        for s in samples {
-            elapsed.push(s.elapsed_s);
-            coverage.push(s.coverage_pct);
-            corpus.push(s.corpus_size);
-        }
-        series.push(Series {
-            cpu,
-            elapsed,
-            coverage,
-            corpus,
-        });
-    }
+/// Render an HTML page with multiple per-CPU line charts from a JSON array of CpuSeries.
+fn render_multi_series(title: &str, series_json: &str, charts: &[ChartSpec]) -> String {
+    let chart_divs = charts
+        .iter()
+        .map(|c| format!(r#"<div id="{id}" class="chart"></div>"#, id = c.div_id))
+        .collect::<Vec<_>>()
+        .join("\n  ");
 
-    let series_json = serde_json::to_string(&series)?;
-    let html = format!(
+    let plot_calls = charts
+        .iter()
+        .map(|c| {
+            format!(
+                r#"    (function() {{
+      const traces = series.map(s => ({{
+        x: s.elapsed,
+        y: s.{field},
+        mode: 'lines',
+        name: s.cpu
+      }}));
+      Plotly.newPlot('{div}', traces, {{
+        title: '{title}',
+        xaxis: {{ title: 'Elapsed (s)' }},
+        yaxis: {{ title: '{ytitle}' }},
+        legend: {{ orientation: 'h' }}
+      }});
+    }})();"#,
+                field = c.field,
+                div = c.div_id,
+                title = c.title,
+                ytitle = c.y_title
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    format!(
         r#"<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Fuzzamoto Bench Report</title>
+  <title>{title}</title>
   <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.29.1/plotly.min.js"></script>
   <style>
     body {{ font-family: sans-serif; margin: 16px; }}
@@ -956,53 +1105,20 @@ fn write_run_report_html(
   </style>
 </head>
 <body>
-  <h1>Benchmark Report</h1>
-  <div id="coverage" class="chart"></div>
-  <div id="corpus" class="chart"></div>
+  <h1>{title}</h1>
+  {divs}
   <script>
     const series = {series};
-
-    function plotCoverage() {{
-      const traces = series.map(s => ({{
-        x: s.elapsed,
-        y: s.coverage,
-        mode: 'lines',
-        name: s.cpu
-      }}));
-      Plotly.newPlot('coverage', traces, {{
-        title: 'Coverage (%) vs Time',
-        xaxis: {{ title: 'Elapsed (s)' }},
-        yaxis: {{ title: 'Coverage (%)' }},
-        legend: {{ orientation: 'h' }}
-      }});
-    }}
-
-    function plotCorpus() {{
-      const traces = series.map(s => ({{
-        x: s.elapsed,
-        y: s.corpus,
-        mode: 'lines',
-        name: s.cpu
-      }}));
-      Plotly.newPlot('corpus', traces, {{
-        title: 'Corpus Size vs Time',
-        xaxis: {{ title: 'Elapsed (s)' }},
-        yaxis: {{ title: 'Corpus size' }},
-        legend: {{ orientation: 'h' }}
-      }});
-    }}
-
-    plotCoverage();
-    plotCorpus();
+{plots}
   </script>
 </body>
 </html>
 "#,
+        title = title,
+        divs = chart_divs,
         series = series_json,
-    );
-
-    fs::write(run_dir.join("report.html"), html)?;
-    Ok(())
+        plots = plot_calls
+    )
 }
 fn compare_runs(
     baseline_dir: &Path,
@@ -1103,277 +1219,44 @@ fn compare_runs(
 
 /// Write an HTML comparison plotting coverage and corpus per CPU for baseline vs candidate.
 fn write_compare_report_html(baseline_dir: &Path, candidate_dir: &Path) -> Result<()> {
-    #[derive(Serialize)]
-    struct Series {
-        cpu: String,
-        elapsed: Vec<f64>,
-        coverage: Vec<f64>,
-        corpus: Vec<usize>,
-    }
-
-    fn parse_series(contents: &str) -> Vec<Series> {
-        let mut by_cpu: HashMap<String, Vec<(f64, f64, usize)>> = HashMap::new();
-        for (idx, line) in contents.lines().enumerate() {
-            if idx == 0 {
-                continue;
-            }
-            let parts: Vec<_> = line.split(',').collect();
-            if parts.len() < 7 {
-                continue;
-            }
-            let cpu = parts[0].to_string();
-            let Ok(elapsed_s) = parts[1].parse() else {
-                continue;
-            };
-            let Ok(coverage_pct) = parts[4].parse() else {
-                continue;
-            };
-            let Ok(corpus_size) = parts[5].parse() else {
-                continue;
-            };
-            by_cpu
-                .entry(cpu)
-                .or_default()
-                .push((elapsed_s, coverage_pct, corpus_size));
-        }
-        let mut out = Vec::new();
-        for (cpu, mut samples) in by_cpu {
-            samples.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-            let mut elapsed = Vec::with_capacity(samples.len());
-            let mut coverage = Vec::with_capacity(samples.len());
-            let mut corpus = Vec::with_capacity(samples.len());
-            for (e, c, cor) in samples {
-                elapsed.push(e);
-                coverage.push(c);
-                corpus.push(cor);
-            }
-            out.push(Series {
-                cpu,
-                elapsed,
-                coverage,
-                corpus,
-            });
-        }
-        out
-    }
-
     let base_stats = fs::read_to_string(baseline_dir.join("stats.csv"))?;
     let cand_stats = fs::read_to_string(candidate_dir.join("stats.csv"))?;
 
-    let base_series = serde_json::to_string(&parse_series(&base_stats))?;
-    let cand_series = serde_json::to_string(&parse_series(&cand_stats))?;
-
-    let html = format!(
-        r#"<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <title>Benchmark Compare</title>
-  <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.29.1/plotly.min.js"></script>
-  <style>
-    body {{ font-family: sans-serif; margin: 16px; }}
-    .chart {{ width: 100%; max-width: 1100px; height: 420px; margin-bottom: 28px; }}
-  </style>
-</head>
-<body>
-  <h1>Benchmark Compare</h1>
-  <div id="cov_base" class="chart"></div>
-  <div id="cov_cand" class="chart"></div>
-  <div id="corpus_base" class="chart"></div>
-  <div id="corpus_cand" class="chart"></div>
-  <script>
-    const base = {base};
-    const cand = {cand};
-
-    function plot(series, div, title, field) {{
-      const traces = series.map(s => ({{
-        x: s.elapsed,
-        y: s[field],
-        mode: 'lines',
-        name: s.cpu
-      }}));
-      Plotly.newPlot(div, traces, {{
-        title,
-        xaxis: {{ title: 'Elapsed (s)' }},
-        yaxis: {{ title: field === 'coverage' ? 'Coverage (%)' : 'Corpus size' }},
-        legend: {{ orientation: 'h' }}
-      }});
-    }}
-
-    plot(base, 'cov_base', 'Baseline: Coverage vs Time', 'coverage');
-    plot(cand, 'cov_cand', 'Candidate: Coverage vs Time', 'coverage');
-    plot(base, 'corpus_base', 'Baseline: Corpus vs Time', 'corpus');
-    plot(cand, 'corpus_cand', 'Candidate: Corpus vs Time', 'corpus');
-  </script>
-</body>
-</html>
-"#,
-        base = base_series,
-        cand = cand_series
-    );
+    let base_series = serde_json::to_string(&parse_stats_series(&base_stats))?;
+    let cand_series = serde_json::to_string(&parse_stats_series(&cand_stats))?;
 
     let out_dir = baseline_dir.parent().unwrap_or_else(|| Path::new("."));
-    fs::write(out_dir.join("compare.html"), html)?;
+    fs::write(
+        out_dir.join("compare.html"),
+        render_compare_series(
+            "Benchmark Compare",
+            &base_series,
+            &cand_series,
+            "Coverage vs Time",
+            "Corpus vs Time",
+        ),
+    )?;
     Ok(())
 }
 
 /// Compare two suite roots by averaging their run_* stats and plotting mean coverage/corpus.
 fn write_compare_suite_html(baseline_root: &Path, candidate_root: &Path) -> Result<()> {
-    let suite_json = |root: &Path| -> Result<String> {
-        // Reuse suite aggregation logic: load stats.csv files under run_* and bucket means.
-        let mut suite_samples: HashMap<String, Vec<BenchSample>> = HashMap::new();
-        for entry in fs::read_dir(root)? {
-            let entry = entry?;
-            let path = entry.path();
-            if !path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .map_or(false, |n| n.starts_with("run_"))
-            {
-                continue;
-            }
-            let stats_path = path.join("stats.csv");
-            if !stats_path.exists() {
-                continue;
-            }
-            let contents = fs::read_to_string(&stats_path)?;
-            for (idx, line) in contents.lines().enumerate() {
-                if idx == 0 {
-                    continue;
-                }
-                let parts: Vec<_> = line.split(',').collect();
-                if parts.len() < 7 {
-                    continue;
-                }
-                let cpu = parts[0].to_string();
-                let Ok(elapsed_s) = parts[1].parse() else {
-                    continue;
-                };
-                let Ok(execs) = parts[2].parse() else {
-                    continue;
-                };
-                let Ok(execs_per_sec) = parts[3].parse() else {
-                    continue;
-                };
-                let Ok(coverage_pct) = parts[4].parse() else {
-                    continue;
-                };
-                let Ok(corpus_size) = parts[5].parse() else {
-                    continue;
-                };
-                let Ok(crashes) = parts[6].parse() else {
-                    continue;
-                };
-                suite_samples.entry(cpu).or_default().push(BenchSample {
-                    elapsed_s,
-                    execs,
-                    execs_per_sec,
-                    coverage_pct,
-                    corpus_size,
-                    crashes,
-                });
-            }
-        }
-
-        #[derive(Default)]
-        struct Bucket {
-            count: usize,
-            coverage_sum: f64,
-            corpus_sum: f64,
-        }
-        let mut buckets: BTreeMap<u64, Bucket> = BTreeMap::new();
-        for series in suite_samples.values() {
-            for s in series {
-                let key = (s.elapsed_s * 1000.0).round() as u64;
-                let entry = buckets.entry(key).or_default();
-                entry.count += 1;
-                entry.coverage_sum += s.coverage_pct;
-                entry.corpus_sum += s.corpus_size as f64;
-            }
-        }
-
-        #[derive(Serialize)]
-        struct SuiteSeries {
-            elapsed: Vec<f64>,
-            coverage_mean: Vec<f64>,
-            corpus_mean: Vec<f64>,
-        }
-
-        let mut suite_series = SuiteSeries {
-            elapsed: Vec::with_capacity(buckets.len()),
-            coverage_mean: Vec::with_capacity(buckets.len()),
-            corpus_mean: Vec::with_capacity(buckets.len()),
-        };
-        for (k, v) in buckets {
-            if v.count == 0 {
-                continue;
-            }
-            suite_series.elapsed.push(k as f64 / 1000.0);
-            suite_series
-                .coverage_mean
-                .push(v.coverage_sum / v.count as f64);
-            suite_series.corpus_mean.push(v.corpus_sum / v.count as f64);
-        }
-        Ok(serde_json::to_string(&suite_series)?)
-    };
-
-    let base_json = suite_json(baseline_root)?;
-    let cand_json = suite_json(candidate_root)?;
-
-    let html = format!(
-        r#"<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <title>Benchmark Suite Compare</title>
-  <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.29.1/plotly.min.js"></script>
-  <style>
-    body {{ font-family: sans-serif; margin: 16px; }}
-    .chart {{ width: 100%; max-width: 1100px; height: 420px; margin-bottom: 28px; }}
-  </style>
-</head>
-<body>
-  <h1>Suite Compare</h1>
-  <div id="cov" class="chart"></div>
-  <div id="corpus" class="chart"></div>
-  <script>
-    const base = {base};
-    const cand = {cand};
-
-    function plot(div, field, title, yTitle) {{
-      Plotly.newPlot(div, [
-        {{
-          x: base.elapsed,
-          y: base[field],
-          mode: 'lines',
-          name: 'baseline'
-        }},
-        {{
-          x: cand.elapsed,
-          y: cand[field],
-          mode: 'lines',
-          name: 'candidate'
-        }}
-      ], {{
-        title,
-        xaxis: {{ title: 'Elapsed (s)' }},
-        yaxis: {{ title: yTitle }},
-        legend: {{ orientation: 'h' }}
-      }});
-    }}
-
-    plot('cov', 'coverage_mean', 'Coverage vs Time (mean across runs)', 'Coverage (%)');
-    plot('corpus', 'corpus_mean', 'Corpus vs Time (mean across runs)', 'Corpus size');
-  </script>
-</body>
-</html>
-"#,
-        base = base_json,
-        cand = cand_json
-    );
+    let base_series =
+        serde_json::to_string(&bucket_mean_series(&load_suite_samples(baseline_root)?))?;
+    let cand_series =
+        serde_json::to_string(&bucket_mean_series(&load_suite_samples(candidate_root)?))?;
 
     let out_dir = baseline_root.parent().unwrap_or_else(|| Path::new("."));
-    fs::write(out_dir.join("compare.html"), html)?;
+    fs::write(
+        out_dir.join("compare.html"),
+        render_compare_series(
+            "Benchmark Suite Compare",
+            &base_series,
+            &cand_series,
+            "Coverage vs Time (mean across runs)",
+            "Corpus vs Time (mean across runs)",
+        ),
+    )?;
     Ok(())
 }
 fn load_summary(run_dir: &Path) -> Result<BenchSummary> {
