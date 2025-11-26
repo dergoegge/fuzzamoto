@@ -10,7 +10,7 @@ pub use concat::*;
 pub use input::*;
 pub use operation::*;
 use rand::RngCore;
-pub use taproot::{TaprootLeafSelectMutator, TaprootScriptMutator};
+pub use taproot::TaprootScriptMutator;
 
 #[derive(Debug)]
 pub enum MutatorError {
