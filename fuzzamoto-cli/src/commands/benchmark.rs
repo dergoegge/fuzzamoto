@@ -1102,53 +1102,65 @@ fn render_multi_series(title: &str, series_json: &str, charts: &[ChartSpec]) -> 
 
 /// Render run-level report with time-series plus relcov/histogram (if available in summary).
 fn render_run_report(title: &str, series_json: &str, summary_json: &str) -> String {
-    const SUMMARY_PLACEHOLDER: &str = "SUMMARY_JSON";
-    // Reuse the existing multi-series renderer for coverage/corpus and append bar charts.
-    let base = render_multi_series(
-        title,
-        series_json,
-        &[
-            ChartSpec {
-                div_id: "coverage",
-                title: "Coverage (%) vs Time",
-                y_title: "Coverage (%)",
-                field: "coverage",
-            },
-            ChartSpec {
-                div_id: "corpus",
-                title: "Corpus Size vs Time",
-                y_title: "Corpus size",
-                field: "corpus",
-            },
-        ],
-    );
-
-    // Inject extra containers and plotting script for histogram and relcov.
-    let metrics_divs = r#"
+    format!(
+        r#"<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>{title}</title>
+  <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.29.1/plotly.min.js"></script>
+  <style>
+    body {{ font-family: sans-serif; margin: 16px; }}
+    .chart {{ width: 100%; max-width: 1100px; height: 420px; margin-bottom: 28px; }}
+  </style>
+</head>
+<body>
+  <h1>{title}</h1>
+  <div id="coverage" class="chart"></div>
+  <div id="corpus" class="chart"></div>
   <div id="edge_hist" class="chart"></div>
   <div id="relcov" class="chart"></div>
-"#;
-
-    let metrics_script = r#"
   <script>
-    const summary = SUMMARY_JSON;
-    // Edge histogram bar chart if present
-    if (summary.edge_histogram) {
+    const series = {series_json};
+    const summary = {summary_json};
+
+    // Coverage/Corpus time series
+    const chartSpecs = [
+      {{ div: 'coverage', field: 'coverage', title: 'Coverage (%) vs Time', y: 'Coverage (%)' }},
+      {{ div: 'corpus',   field: 'corpus',   title: 'Corpus Size vs Time', y: 'Corpus size'   }},
+    ];
+    chartSpecs.forEach(spec => {{
+      const traces = series.map(s => ({
+        x: s.elapsed,
+        y: s[spec.field],
+        mode: 'lines',
+        name: s.cpu,
+      }));
+      Plotly.newPlot(spec.div, traces, {{
+        title: spec.title,
+        xaxis: {{ title: 'Elapsed (s)' }},
+        yaxis: {{ title: spec.y }},
+        legend: {{ orientation: 'h' }}
+      }});
+    }});
+
+    // Edge histogram
+    if (summary.edge_histogram) {{
       Plotly.newPlot('edge_hist', [{
         type: 'bar',
         x: ['1-hit', '2-3 hits', '>=4 hits'],
         y: [summary.edge_histogram.hit_1, summary.edge_histogram.hit_2_3, summary.edge_histogram.hit_ge_4],
         name: 'edges'
-      }], {
+      }], {{
         title: 'Edge Histogram',
-        xaxis: {title: 'Bucket'},
-        yaxis: {title: 'Count'},
-        legend: {orientation: 'h'}
-      });
-    }
+        xaxis: {{title: 'Bucket'}},
+        yaxis: {{title: 'Count'}},
+        legend: {{orientation: 'h'}}
+      }});
+    }}
 
-    // Per-CPU relcov bar chart if present
-    if (summary.per_cpu_relcov) {
+    // Per-CPU relcov
+    if (summary.per_cpu_relcov) {{
       const cpus = summary.per_cpu_relcov.map(e => e.cpu);
       const relcov = summary.per_cpu_relcov.map(e => e.relcov_pct);
       Plotly.newPlot('relcov', [{
@@ -1156,23 +1168,20 @@ fn render_run_report(title: &str, series_json: &str, summary_json: &str) -> Stri
         x: cpus,
         y: relcov,
         name: 'relcov'
-      }], {
+      }], {{
         title: 'Per-CPU Relative Coverage (%)',
-        xaxis: {title: 'CPU'},
-        yaxis: {title: 'Relcov (%)'},
-        legend: {orientation: 'h'}
-      });
-    }
+        xaxis: {{title: 'CPU'}},
+        yaxis: {{title: 'Relcov (%)'}},
+        legend: {{orientation: 'h'}}
+      }});
+    }}
   </script>
-"#;
-
-    base.replace(
-        "</body>",
-        &format!(
-            "{}{}\n</body>",
-            metrics_divs,
-            metrics_script.replace(SUMMARY_PLACEHOLDER, summary_json)
-        ),
+</body>
+</html>
+"#,
+        title = title,
+        series_json = series_json,
+        summary_json = summary_json,
     )
 }
 fn compare_runs(
