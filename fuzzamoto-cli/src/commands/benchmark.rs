@@ -213,37 +213,93 @@ fn run_single(
 fn aggregate_suite(root: &Path, write_html: bool) -> Result<()> {
     let suite_samples = load_suite_samples(root)?;
 
+    // Load per-run summary.json files for suite-level relcov/histogram.
+    let mut suite_hist = EdgeHistogram::default();
+    let mut suite_runs_with_hist = 0usize;
+    let mut suite_relcov: Vec<(String, f64, usize)> = Vec::new(); // (cpu, sum, count)
+
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        let path = entry.path();
+        if !path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map_or(false, |n| n.starts_with("run_"))
+        {
+            continue;
+        }
+        let summary_path = path.join("summary.json");
+        if !summary_path.exists() {
+            continue;
+        }
+        if let Ok(bytes) = fs::read(&summary_path) {
+            if let Ok(summary) = serde_json::from_slice::<BenchSummary>(&bytes) {
+                if let Some(hist) = summary.edge_histogram {
+                    suite_hist.hit_1 += hist.hit_1;
+                    suite_hist.hit_2_3 += hist.hit_2_3;
+                    suite_hist.hit_ge_4 += hist.hit_ge_4;
+                    suite_runs_with_hist += 1;
+                }
+                if let Some(relcov) = summary.per_cpu_relcov {
+                    for entry in relcov {
+                        if let Some((_, sum, cnt)) = suite_relcov
+                            .iter_mut()
+                            .find(|(cpu, _, _)| cpu == &entry.cpu)
+                        {
+                            *sum += entry.relcov_pct;
+                            *cnt += 1;
+                        } else {
+                            suite_relcov.push((entry.cpu, entry.relcov_pct, 1));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     if suite_samples.is_empty() {
         return Ok(());
     }
 
     let suite_series = bucket_mean_series(&suite_samples);
     let suite_json = serde_json::to_string(&suite_series)?;
+    let hist_json = if suite_runs_with_hist > 0 {
+        Some(serde_json::to_string(&suite_hist).unwrap_or_default())
+    } else {
+        None
+    };
+    let relcov_json = if !suite_relcov.is_empty() {
+        // average relcov per CPU across runs
+        let averaged: Vec<RelcovEntry> = suite_relcov
+            .into_iter()
+            .map(|(cpu, sum, cnt)| RelcovEntry {
+                cpu,
+                edges: 0,
+                relcov_pct: sum / cnt as f64,
+            })
+            .collect();
+        Some(serde_json::to_string(&averaged).unwrap_or_default())
+    } else {
+        None
+    };
     if write_html {
-        write_suite_report_html(root, &suite_json)?;
+        write_suite_report_html(
+            root,
+            &suite_json,
+            hist_json.as_deref(),
+            relcov_json.as_deref(),
+        )?;
     }
 
     Ok(())
 }
-
-fn write_suite_report_html(root: &Path, suite_series_json: &str) -> Result<()> {
-    // Reuse multi-series renderer with two charts (coverage/corpus means).
-    let charts = [
-        ChartSpec {
-            div_id: "suite_coverage",
-            title: "Coverage (%) vs Time (mean across runs)",
-            y_title: "Coverage (%)",
-            field: "coverage_mean",
-        },
-        ChartSpec {
-            div_id: "suite_corpus",
-            title: "Corpus Size vs Time (mean across runs)",
-            y_title: "Corpus size",
-            field: "corpus_mean",
-        },
-    ];
-    let html = render_multi_series("Fuzzamoto Bench Suite Report", suite_series_json, &charts);
-
+fn write_suite_report_html(
+    root: &Path,
+    suite_series_json: &str,
+    hist_json: Option<&str>,
+    relcov_json: Option<&str>,
+) -> Result<()> {
+    let html = render_suite_report(suite_series_json, hist_json, relcov_json);
     fs::write(root.join("suite_report.html"), html)?;
     Ok(())
 }
@@ -1182,6 +1238,99 @@ fn render_run_report(title: &str, series_json: &str, summary_json: &str) -> Stri
         title = title,
         series_json = series_json,
         summary_json = summary_json,
+    )
+}
+
+/// Render suite-level report with mean coverage/corpus and optional suite-level histogram/relcov.
+fn render_suite_report(
+    suite_series_json: &str,
+    hist_json: Option<&str>,
+    relcov_json: Option<&str>,
+) -> String {
+    format!(
+        r#"<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Fuzzamoto Bench Suite Report</title>
+  <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.29.1/plotly.min.js"></script>
+  <style>
+    body {{ font-family: sans-serif; margin: 16px; }}
+    .chart {{ width: 100%; max-width: 1100px; height: 420px; margin-bottom: 28px; }}
+  </style>
+</head>
+<body>
+  <h1>Fuzzamoto Bench Suite Report</h1>
+  <div id="suite_coverage" class="chart"></div>
+  <div id="suite_corpus" class="chart"></div>
+  <div id="suite_edge_hist" class="chart"></div>
+  <div id="suite_relcov" class="chart"></div>
+  <script>
+    const series = {suite_series};
+    const hist = {hist_json};
+    const relcov = {relcov_json};
+
+    // Coverage/Corpus mean curves
+    Plotly.newPlot('suite_coverage', [{
+      x: series.elapsed,
+      y: series.coverage_mean,
+      mode: 'lines',
+      name: 'coverage'
+    }], {
+      title: 'Coverage (%) vs Time (mean across runs)',
+      xaxis: {title: 'Elapsed (s)'},
+      yaxis: {title: 'Coverage (%)'},
+      legend: {orientation: 'h'}
+    });
+
+    Plotly.newPlot('suite_corpus', [{
+      x: series.elapsed,
+      y: series.corpus_mean,
+      mode: 'lines',
+      name: 'corpus'
+    }], {
+      title: 'Corpus Size vs Time (mean across runs)',
+      xaxis: {title: 'Elapsed (s)'},
+      yaxis: {title: 'Corpus size'},
+      legend: {orientation: 'h'}
+    });
+
+    // Edge histogram (sum across runs)
+    if (hist) {
+      Plotly.newPlot('suite_edge_hist', [{
+        type: 'bar',
+        x: ['1-hit', '2-3 hits', '>=4 hits'],
+        y: [hist.hit_1, hist.hit_2_3, hist.hit_ge_4],
+        name: 'edges'
+      }], {
+        title: 'Edge Histogram (sum across runs)',
+        xaxis: {title: 'Bucket'},
+        yaxis: {title: 'Count'},
+        legend: {orientation: 'h'}
+      });
+    }
+
+    // Mean relcov per CPU across runs
+    if (relcov) {
+      Plotly.newPlot('suite_relcov', [{
+        type: 'bar',
+        x: relcov.map(e => e.cpu),
+        y: relcov.map(e => e.relcov_pct),
+        name: 'relcov'
+      }], {
+        title: 'Per-CPU Relative Coverage (%) (mean across runs)',
+        xaxis: {title: 'CPU'},
+        yaxis: {title: 'Relcov (%)'},
+        legend: {orientation: 'h'}
+      });
+    }
+  </script>
+</body>
+</html>
+"#,
+        suite_series = suite_series_json,
+        hist_json = hist_json.unwrap_or("null"),
+        relcov_json = relcov_json.unwrap_or("null"),
     )
 }
 fn compare_runs(
