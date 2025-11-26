@@ -282,6 +282,23 @@ fn aggregate_suite(root: &Path, write_html: bool) -> Result<()> {
     } else {
         None
     };
+
+    let suite_summary = SuiteSummary {
+        runs: suite_runs_with_hist.max(1),
+        coverage_mean: suite_series.coverage_mean.last().copied(),
+        corpus_mean: suite_series.corpus_mean.last().copied(),
+        edge_histogram: hist_json
+            .as_deref()
+            .and_then(|s| serde_json::from_str::<EdgeHistogram>(s).ok()),
+        per_cpu_relcov: relcov_json
+            .as_deref()
+            .and_then(|s| serde_json::from_str::<Vec<RelcovEntry>>(s).ok()),
+    };
+    fs::write(
+        root.join("suite_summary.json"),
+        serde_json::to_vec_pretty(&suite_summary)?,
+    )?;
+
     if write_html {
         write_suite_report_html(
             root,
@@ -450,6 +467,19 @@ struct BenchSummary {
     mutation_stats: Option<MutationStats>,
     #[serde(skip_serializing_if = "Option::is_none")]
     metadata: Option<BenchMetadata>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct SuiteSummary {
+    runs: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    coverage_mean: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    corpus_mean: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    edge_histogram: Option<EdgeHistogram>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    per_cpu_relcov: Option<Vec<RelcovEntry>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
