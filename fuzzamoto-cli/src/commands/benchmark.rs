@@ -309,7 +309,7 @@ fn aggregate_bench_stats(
             summary.final_elapsed_s = summary.final_elapsed_s.max(last.elapsed_s);
             summary.total_execs += last.execs;
             summary.max_coverage_pct = summary.max_coverage_pct.max(last.coverage_pct);
-            summary.final_corpus_size += last.corpus_size;
+            summary.final_corpus_size = summary.final_corpus_size.max(last.corpus_size);
         }
     }
 
