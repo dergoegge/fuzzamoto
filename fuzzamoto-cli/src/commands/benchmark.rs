@@ -1188,87 +1188,85 @@ fn render_multi_series(title: &str, series_json: &str, charts: &[ChartSpec]) -> 
 
 /// Render run-level report with time-series plus relcov/histogram (if available in summary).
 fn render_run_report(title: &str, series_json: &str, summary_json: &str) -> String {
-    format!(
-        r#"<!doctype html>
+    const TEMPLATE: &str = r#"<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>{title}</title>
+  <title>__TITLE__</title>
   <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.29.1/plotly.min.js"></script>
   <style>
-    body {{ font-family: sans-serif; margin: 16px; }}
-    .chart {{ width: 100%; max-width: 1100px; height: 420px; margin-bottom: 28px; }}
+    body { font-family: sans-serif; margin: 16px; }
+    .chart { width: 100%; max-width: 1100px; height: 420px; margin-bottom: 28px; }
   </style>
 </head>
 <body>
-  <h1>{title}</h1>
+  <h1>__TITLE__</h1>
   <div id="coverage" class="chart"></div>
   <div id="corpus" class="chart"></div>
   <div id="edge_hist" class="chart"></div>
   <div id="relcov" class="chart"></div>
   <script>
-    const series = {series_json};
-    const summary = {summary_json};
+    const series = __SERIES__;
+    const summary = __SUMMARY__;
 
     // Coverage/Corpus time series
     const chartSpecs = [
-      {{ div: 'coverage', field: 'coverage', title: 'Coverage (%) vs Time', y: 'Coverage (%)' }},
-      {{ div: 'corpus',   field: 'corpus',   title: 'Corpus Size vs Time', y: 'Corpus size'   }},
+      { div: 'coverage', field: 'coverage', title: 'Coverage (%) vs Time', y: 'Coverage (%)' },
+      { div: 'corpus',   field: 'corpus',   title: 'Corpus Size vs Time', y: 'Corpus size'   },
     ];
-    chartSpecs.forEach(spec => {{
+    chartSpecs.forEach(spec => {
       const traces = series.map(s => ({
         x: s.elapsed,
         y: s[spec.field],
         mode: 'lines',
         name: s.cpu,
       }));
-      Plotly.newPlot(spec.div, traces, {{
+      Plotly.newPlot(spec.div, traces, {
         title: spec.title,
-        xaxis: {{ title: 'Elapsed (s)' }},
-        yaxis: {{ title: spec.y }},
-        legend: {{ orientation: 'h' }}
-      }});
-    }});
+        xaxis: { title: 'Elapsed (s)' },
+        yaxis: { title: spec.y },
+        legend: { orientation: 'h' }
+      });
+    });
 
     // Edge histogram
-    if (summary.edge_histogram) {{
+    if (summary.edge_histogram) {
       Plotly.newPlot('edge_hist', [{
         type: 'bar',
         x: ['1-hit', '2-3 hits', '>=4 hits'],
         y: [summary.edge_histogram.hit_1, summary.edge_histogram.hit_2_3, summary.edge_histogram.hit_ge_4],
         name: 'edges'
-      }], {{
+      }], {
         title: 'Edge Histogram',
-        xaxis: {{title: 'Bucket'}},
-        yaxis: {{title: 'Count'}},
-        legend: {{orientation: 'h'}}
-      }});
-    }}
+        xaxis: {title: 'Bucket'},
+        yaxis: {title: 'Count'},
+        legend: {orientation: 'h'}
+      });
+    }
 
     // Per-CPU relcov
-    if (summary.per_cpu_relcov) {{
-      const cpus = summary.per_cpu_relcov.map(e => e.cpu);
-      const relcov = summary.per_cpu_relcov.map(e => e.relcov_pct);
+    if (summary.per_cpu_relcov) {
       Plotly.newPlot('relcov', [{
         type: 'bar',
-        x: cpus,
-        y: relcov,
+        x: summary.per_cpu_relcov.map(e => e.cpu),
+        y: summary.per_cpu_relcov.map(e => e.relcov_pct),
         name: 'relcov'
-      }], {{
+      }], {
         title: 'Per-CPU Relative Coverage (%)',
-        xaxis: {{title: 'CPU'}},
-        yaxis: {{title: 'Relcov (%)'}},
-        legend: {{orientation: 'h'}}
-      }});
-    }}
+        xaxis: {title: 'CPU'},
+        yaxis: {title: 'Relcov (%)'},
+        legend: {orientation: 'h'}
+      });
+    }
   </script>
 </body>
 </html>
-"#,
-        title = title,
-        series_json = series_json,
-        summary_json = summary_json,
-    )
+"#;
+
+    TEMPLATE
+        .replace("__TITLE__", title)
+        .replace("__SERIES__", series_json)
+        .replace("__SUMMARY__", summary_json)
 }
 
 /// Render suite-level report with mean coverage/corpus and optional suite-level histogram/relcov.
@@ -1277,16 +1275,15 @@ fn render_suite_report(
     hist_json: Option<&str>,
     relcov_json: Option<&str>,
 ) -> String {
-    format!(
-        r#"<!doctype html>
+    const TEMPLATE: &str = r#"<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <title>Fuzzamoto Bench Suite Report</title>
   <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.29.1/plotly.min.js"></script>
   <style>
-    body {{ font-family: sans-serif; margin: 16px; }}
-    .chart {{ width: 100%; max-width: 1100px; height: 420px; margin-bottom: 28px; }}
+    body { font-family: sans-serif; margin: 16px; }
+    .chart { width: 100%; max-width: 1100px; height: 420px; margin-bottom: 28px; }
   </style>
 </head>
 <body>
@@ -1296,11 +1293,10 @@ fn render_suite_report(
   <div id="suite_edge_hist" class="chart"></div>
   <div id="suite_relcov" class="chart"></div>
   <script>
-    const series = {suite_series};
-    const hist = {hist_json};
-    const relcov = {relcov_json};
+    const series = __SUITE_SERIES__;
+    const hist = __HIST__;
+    const relcov = __RELCOV__;
 
-    // Coverage/Corpus mean curves
     Plotly.newPlot('suite_coverage', [{
       x: series.elapsed,
       y: series.coverage_mean,
@@ -1308,9 +1304,9 @@ fn render_suite_report(
       name: 'coverage'
     }], {
       title: 'Coverage (%) vs Time (mean across runs)',
-      xaxis: {title: 'Elapsed (s)'},
-      yaxis: {title: 'Coverage (%)'},
-      legend: {orientation: 'h'}
+      xaxis: { title: 'Elapsed (s)' },
+      yaxis: { title: 'Coverage (%)' },
+      legend: { orientation: 'h' }
     });
 
     Plotly.newPlot('suite_corpus', [{
@@ -1320,12 +1316,11 @@ fn render_suite_report(
       name: 'corpus'
     }], {
       title: 'Corpus Size vs Time (mean across runs)',
-      xaxis: {title: 'Elapsed (s)'},
-      yaxis: {title: 'Corpus size'},
-      legend: {orientation: 'h'}
+      xaxis: { title: 'Elapsed (s)' },
+      yaxis: { title: 'Corpus size' },
+      legend: { orientation: 'h' }
     });
 
-    // Edge histogram (sum across runs)
     if (hist) {
       Plotly.newPlot('suite_edge_hist', [{
         type: 'bar',
@@ -1340,7 +1335,6 @@ fn render_suite_report(
       });
     }
 
-    // Mean relcov per CPU across runs
     if (relcov) {
       Plotly.newPlot('suite_relcov', [{
         type: 'bar',
@@ -1357,11 +1351,12 @@ fn render_suite_report(
   </script>
 </body>
 </html>
-"#,
-        suite_series = suite_series_json,
-        hist_json = hist_json.unwrap_or("null"),
-        relcov_json = relcov_json.unwrap_or("null"),
-    )
+"#;
+
+    TEMPLATE
+        .replace("__SUITE_SERIES__", suite_series_json)
+        .replace("__HIST__", hist_json.unwrap_or("null"))
+        .replace("__RELCOV__", relcov_json.unwrap_or("null"))
 }
 fn compare_runs(
     baseline_dir: &Path,
