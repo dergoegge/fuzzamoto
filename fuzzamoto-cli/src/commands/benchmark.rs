@@ -1014,33 +1014,17 @@ fn write_run_report(run_dir: &Path) -> Result<()> {
 fn write_run_report_html(
     run_dir: &Path,
     samples: &[(String, BenchSample)],
-    _summary: &BenchSummary,
+    summary: &BenchSummary,
 ) -> Result<()> {
     if samples.is_empty() {
         return Ok(());
     }
 
     let series_json = serde_json::to_string(&group_samples_by_cpu(samples))?;
+    let summary_json = serde_json::to_string(summary)?;
     fs::write(
         run_dir.join("report.html"),
-        render_multi_series(
-            "Fuzzamoto Bench Report",
-            &series_json,
-            &[
-                ChartSpec {
-                    div_id: "coverage",
-                    title: "Coverage (%) vs Time",
-                    y_title: "Coverage (%)",
-                    field: "coverage",
-                },
-                ChartSpec {
-                    div_id: "corpus",
-                    title: "Corpus Size vs Time",
-                    y_title: "Corpus size",
-                    field: "corpus",
-                },
-            ],
-        ),
+        render_run_report("Fuzzamoto Bench Report", &series_json, &summary_json),
     )?;
     Ok(())
 }
@@ -1113,6 +1097,82 @@ fn render_multi_series(title: &str, series_json: &str, charts: &[ChartSpec]) -> 
         divs = chart_divs,
         series = series_json,
         plots = plot_calls
+    )
+}
+
+/// Render run-level report with time-series plus relcov/histogram (if available in summary).
+fn render_run_report(title: &str, series_json: &str, summary_json: &str) -> String {
+    const SUMMARY_PLACEHOLDER: &str = "SUMMARY_JSON";
+    // Reuse the existing multi-series renderer for coverage/corpus and append bar charts.
+    let base = render_multi_series(
+        title,
+        series_json,
+        &[
+            ChartSpec {
+                div_id: "coverage",
+                title: "Coverage (%) vs Time",
+                y_title: "Coverage (%)",
+                field: "coverage",
+            },
+            ChartSpec {
+                div_id: "corpus",
+                title: "Corpus Size vs Time",
+                y_title: "Corpus size",
+                field: "corpus",
+            },
+        ],
+    );
+
+    // Inject extra containers and plotting script for histogram and relcov.
+    let metrics_divs = r#"
+  <div id="edge_hist" class="chart"></div>
+  <div id="relcov" class="chart"></div>
+"#;
+
+    let metrics_script = r#"
+  <script>
+    const summary = SUMMARY_JSON;
+    // Edge histogram bar chart if present
+    if (summary.edge_histogram) {
+      Plotly.newPlot('edge_hist', [{
+        type: 'bar',
+        x: ['1-hit', '2-3 hits', '>=4 hits'],
+        y: [summary.edge_histogram.hit_1, summary.edge_histogram.hit_2_3, summary.edge_histogram.hit_ge_4],
+        name: 'edges'
+      }], {
+        title: 'Edge Histogram',
+        xaxis: {title: 'Bucket'},
+        yaxis: {title: 'Count'},
+        legend: {orientation: 'h'}
+      });
+    }
+
+    // Per-CPU relcov bar chart if present
+    if (summary.per_cpu_relcov) {
+      const cpus = summary.per_cpu_relcov.map(e => e.cpu);
+      const relcov = summary.per_cpu_relcov.map(e => e.relcov_pct);
+      Plotly.newPlot('relcov', [{
+        type: 'bar',
+        x: cpus,
+        y: relcov,
+        name: 'relcov'
+      }], {
+        title: 'Per-CPU Relative Coverage (%)',
+        xaxis: {title: 'CPU'},
+        yaxis: {title: 'Relcov (%)'},
+        legend: {orientation: 'h'}
+      });
+    }
+  </script>
+"#;
+
+    base.replace(
+        "</body>",
+        &format!(
+            "{}{}\n</body>",
+            metrics_divs,
+            metrics_script.replace(SUMMARY_PLACEHOLDER, summary_json)
+        ),
     )
 }
 fn compare_runs(
