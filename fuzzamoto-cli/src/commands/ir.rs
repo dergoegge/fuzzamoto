@@ -8,8 +8,7 @@ use fuzzamoto_ir::{
     CompactFilterQueryGenerator, FullProgramContext, Generator, GetAddrGenerator, GetDataGenerator,
     HeaderGenerator, InstructionContext, InventoryGenerator, LargeTxGenerator, LongChainGenerator,
     OneParentOneChildGenerator, Program, ProgramBuilder, SendBlockGenerator, SendMessageGenerator,
-    SingleTxGenerator, TaprootKeyPathGenerator, TaprootScriptPathGenerator,
-    TaprootTreeSpendGenerator, TxoGenerator, WitnessGenerator,
+    SingleTxGenerator, TxoGenerator, WitnessGenerator,
 };
 
 use rand::Rng;
@@ -220,11 +219,6 @@ fn all_generators(context: &FullProgramContext) -> Vec<Box<dyn Generator<ThreadR
         Box::new(AddrRelayGenerator::default()),
         Box::new(AddrRelayV2Generator::default()),
         Box::new(GetAddrGenerator::default()),
-        Box::new(TaprootKeyPathGenerator::new(context.taproot.txos.clone())),
-        Box::new(TaprootScriptPathGenerator::new(
-            context.taproot.txos.clone(),
-        )),
-        Box::new(TaprootTreeSpendGenerator::new(context.taproot.txos.clone())),
     ]
 }
 

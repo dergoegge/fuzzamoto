@@ -2,32 +2,23 @@ use crate::{
     connections::{Connection, ConnectionType, HandshakeOpts, Transport},
     dictionaries::{Dictionary, FileDictionary},
     scenarios::{Scenario, ScenarioInput, ScenarioResult},
-    taproot::{TaprootKeypair, TaprootLeaf, TaprootSpendInfo, TaprootTxo},
     targets::Target,
     test_utils,
 };
 
 use bitcoin::{
-    Amount, Block, BlockHash, OutPoint, Sequence, Transaction, TxIn, TxOut, Witness,
-    blockdata::opcodes::{
-        OP_TRUE,
-        all::{OP_CHECKSIG, OP_PUSHNUM_1},
-    },
+    Block, BlockHash,
     consensus::encode::{self, Decodable, Encodable, VarInt},
-    hashes::{Hash, sha256},
+    hashes::Hash,
     p2p::{
         message::{CommandString, NetworkMessage},
         message_blockdata::Inventory,
         message_compact_blocks::SendCmpct,
     },
-    script::{PushBytesBuf, ScriptBuf},
-    secp256k1::{Keypair, Secp256k1, SecretKey, XOnlyPublicKey},
-    taproot::{LeafVersion, TaprootBuilder, TaprootSpendInfo as BitcoinTaprootSpendInfo},
-    transaction,
 };
 
 use io::{self, Read, Write};
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
 
 pub enum Action {
     Connect {
@@ -48,22 +39,6 @@ pub enum Action {
 
 pub struct TestCase {
     pub actions: Vec<Action>,
-}
-
-/// Limit how many deterministic Taproot UTXOs we mine per snapshot
-const TAPROOT_TARGET_OUTPUTS: usize = 4;
-/// Fixed fee we subtract when spending the OP_TRUE coinbase into a Taproot output
-const TAPROOT_FEE_SATS: u64 = 5_000;
-/// Only reuse coinbases below this height so they are guaranteed to be mature
-const COINBASE_MATURITY_HEIGHT_LIMIT: u32 = 100;
-
-/// Records the tapscript + version we plan to commit so the builder loop can
-/// add each leaf and later serialize the exact same data into the Taproot
-/// context without recomputing anything.
-#[derive(Clone)]
-struct TaprootLeafPlan {
-    script: ScriptBuf,
-    version: LeafVersion,
 }
 
 impl<'a> ScenarioInput<'a> for TestCase {
@@ -90,7 +65,6 @@ pub struct GenericScenario<TX: Transport, T: Target<TX>> {
     pub connections: Vec<Connection<TX>>,
     pub time: u64,
     pub block_tree: BTreeMap<BlockHash, (Block, u32)>,
-    pub taproot_txos: Vec<TaprootTxo>,
 
     _phantom: std::marker::PhantomData<(TX, T)>,
 }
@@ -185,7 +159,6 @@ impl<TX: Transport, T: Target<TX>> GenericScenario<TX, T> {
         let mut dictionary = FileDictionary::new();
 
         let mut block_tree = BTreeMap::new();
-        let mut taproot_txos = Vec::new();
         for height in 1..=200 {
             time += INTERVAL;
 
@@ -214,15 +187,6 @@ impl<TX: Transport, T: Target<TX>> GenericScenario<TX, T> {
             block_tree.insert(prev_hash, (block, height));
         }
 
-        taproot_txos.extend(Self::append_taproot_blocks(
-            &mut connections,
-            &mut target,
-            &mut block_tree,
-            &mut prev_hash,
-            &mut time,
-            &mut dictionary,
-        )?);
-
         let mut output = std::io::Cursor::new(Vec::new());
         dictionary.write(&mut output);
 
@@ -244,295 +208,8 @@ impl<TX: Transport, T: Target<TX>> GenericScenario<TX, T> {
             time,
             connections: connections.drain(..).map(|(c, _, _, _, _)| c).collect(),
             block_tree,
-            taproot_txos,
             _phantom: std::marker::PhantomData,
         })
-    }
-
-    /// Mines additional blocks that spend mature coinbases into Taproot outputs,
-    /// relays them to the target, and records the resulting Taproot UTXOs.
-    fn append_taproot_blocks(
-        connections: &mut Vec<(Connection<TX>, bool, bool, bool, bool)>,
-        target: &mut T,
-        block_tree: &mut BTreeMap<BlockHash, (Block, u32)>,
-        prev_hash: &mut BlockHash,
-        time: &mut u64,
-        dictionary: &mut FileDictionary,
-    ) -> Result<Vec<TaprootTxo>, String> {
-        let secp = Secp256k1::new();
-        let funding_candidates = Self::collect_mature_coinbases(block_tree);
-        let funding: Vec<_> = funding_candidates
-            .into_iter()
-            .take(TAPROOT_TARGET_OUTPUTS)
-            .collect();
-
-        if funding.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let taproot_txs = Self::build_taproot_transactions(&secp, funding)?;
-        let mut queue: VecDeque<_> = taproot_txs.into();
-        let mut taproot_txos = Vec::new();
-        let mut height = block_tree.values().map(|(_, h)| *h).max().unwrap_or(0);
-
-        while let Some((tx, txo)) = queue.pop_front() {
-            *time += 1;
-            height += 1;
-
-            let mut block = test_utils::mining::mine_block(*prev_hash, height, *time as u32)?;
-            block.txdata.push(tx);
-
-            test_utils::mining::fixup_commitments(&mut block);
-            test_utils::mining::fixup_proof_of_work(&mut block);
-
-            if let Some((connection, ..)) = connections.get_mut(0) {
-                connection.send(&("block".to_string(), encode::serialize(&block)))?;
-            } else {
-                return Err("no connection available to relay taproot blocks".into());
-            }
-
-            target.set_mocktime(*time)?;
-
-            *prev_hash = block.block_hash();
-
-            dictionary.add(block.block_hash().as_raw_hash().as_byte_array().as_slice());
-            dictionary.add(
-                block.txdata[0]
-                    .compute_txid()
-                    .as_raw_hash()
-                    .as_byte_array()
-                    .as_slice(),
-            );
-
-            if let Some(tx) = block.txdata.last() {
-                let txid = tx.compute_txid();
-                dictionary.add(txid.as_raw_hash().as_byte_array().as_slice());
-                let wtxid = tx.compute_wtxid();
-                dictionary.add(wtxid.as_raw_hash().as_byte_array().as_slice());
-            }
-
-            taproot_txos.push(txo);
-            block_tree.insert(*prev_hash, (block, height));
-        }
-
-        Ok(taproot_txos)
-    }
-
-    /// Returns coinbase outputs below the maturity threshold so they can be
-    /// safely spent into Taproot transactions.
-    fn collect_mature_coinbases(
-        block_tree: &BTreeMap<BlockHash, (Block, u32)>,
-    ) -> Vec<(OutPoint, Amount)> {
-        let mut entries: Vec<_> = block_tree
-            .values()
-            .filter(|(_, height)| *height < COINBASE_MATURITY_HEIGHT_LIMIT)
-            .map(|(block, height)| {
-                let coinbase = block.coinbase().expect("block must include a coinbase");
-                (
-                    *height,
-                    OutPoint {
-                        txid: coinbase.compute_txid(),
-                        vout: 0,
-                    },
-                    coinbase.output[0].value,
-                )
-            })
-            .collect();
-        entries.sort_by_key(|(height, _, _)| *height);
-        entries
-            .into_iter()
-            .map(|(_, outpoint, amount)| (outpoint, amount))
-            .collect()
-    }
-
-    /// Creates the list of Taproot transactions (key-path and script-path)
-    /// backed by the selected coinbase outputs.
-    fn build_taproot_transactions(
-        secp: &Secp256k1<bitcoin::secp256k1::All>,
-        funding: Vec<(OutPoint, Amount)>,
-    ) -> Result<Vec<(Transaction, TaprootTxo)>, String> {
-        let mut outputs = Vec::new();
-        for (index, (outpoint, amount)) in funding.into_iter().enumerate() {
-            // Alternate between pure key-path (even index) and script-path (odd index) taproots.
-            let include_script_path = index % 2 == 1;
-            let (tx, taproot_txo) = Self::create_taproot_transaction(
-                secp,
-                outpoint,
-                amount,
-                index as u32,
-                include_script_path,
-            )?;
-            outputs.push((tx, taproot_txo));
-        }
-        Ok(outputs)
-    }
-
-    /// Builds a single Taproot transaction and the corresponding `TaprootTxo`
-    /// metadata entry that will be stored in the context dump.
-    fn create_taproot_transaction(
-        secp: &Secp256k1<bitcoin::secp256k1::All>,
-        funding_outpoint: OutPoint,
-        funding_amount: Amount,
-        seed: u32,
-        include_script_path: bool,
-    ) -> Result<(Transaction, TaprootTxo), String> {
-        let secret_key = Self::deterministic_secret_key(&funding_outpoint, seed);
-        let keypair = Keypair::from_secret_key(secp, &secret_key);
-        let (internal_key, _) = XOnlyPublicKey::from_keypair(&keypair);
-
-        let mut leaf_plans = Vec::new();
-        if include_script_path {
-            leaf_plans.push(TaprootLeafPlan {
-                script: Self::build_default_tapscript(&internal_key)?,
-                version: LeafVersion::TapScript,
-            });
-        }
-
-        let mut builder = TaprootBuilder::new();
-        for leaf in &leaf_plans {
-            builder = builder
-                .add_leaf_with_ver(0, leaf.script.clone(), leaf.version)
-                .map_err(|e| format!("{e:?}"))?;
-        }
-
-        let spend_info = if leaf_plans.is_empty() {
-            BitcoinTaprootSpendInfo::new_key_spend(secp, internal_key, None)
-        } else {
-            builder
-                .finalize(secp, internal_key)
-                .map_err(|e| format!("{e:?}"))?
-        };
-
-        let output_key_bytes = spend_info.output_key().to_x_only_public_key().serialize();
-        let push_bytes = PushBytesBuf::try_from(output_key_bytes.to_vec())
-            .map_err(|_| "failed to encode taproot key bytes".to_string())?;
-        let script_pubkey = ScriptBuf::builder()
-            .push_opcode(OP_PUSHNUM_1)
-            .push_slice(&push_bytes)
-            .into_script();
-
-        let input_sats = funding_amount.to_sat();
-        if input_sats <= TAPROOT_FEE_SATS {
-            return Err("insufficient funds for taproot transaction".into());
-        }
-        let output_sats = input_sats - TAPROOT_FEE_SATS;
-
-        let mut witness = Witness::new();
-        witness.push([OP_TRUE.to_u8()]);
-
-        let tx = Transaction {
-            version: transaction::Version(2),
-            lock_time: bitcoin::absolute::LockTime::from_height(0).unwrap(),
-            input: vec![TxIn {
-                previous_output: funding_outpoint,
-                script_sig: ScriptBuf::new(),
-                sequence: Sequence(0xFFFFFFFF),
-                witness,
-            }],
-            output: vec![TxOut {
-                value: Amount::from_sat(output_sats),
-                script_pubkey: script_pubkey.clone(),
-            }],
-        };
-
-        let leaves = leaf_plans
-            .iter()
-            .map(|plan| {
-                let control_block = spend_info
-                    .control_block(&(plan.script.clone(), plan.version))
-                    .ok_or_else(|| "missing control block for tapscript leaf".to_string())?;
-                let merkle_branch = control_block
-                    .merkle_branch
-                    .iter()
-                    .map(|hash| *hash.as_byte_array())
-                    .collect();
-                Ok(TaprootLeaf {
-                    version: plan.version.to_consensus(),
-                    script: plan.script.as_bytes().to_vec(),
-                    merkle_branch,
-                })
-            })
-            .collect::<Result<Vec<_>, String>>()?;
-
-        let taproot_txo = Self::encode_taproot_txo(
-            &tx,
-            output_sats,
-            secret_key,
-            internal_key,
-            &script_pubkey,
-            &spend_info,
-            leaves,
-        )?;
-
-        Ok((tx, taproot_txo))
-    }
-
-    /// Packages the transaction plus spend info into the
-    /// serializable `TaprootTxo` format stored in the context.
-    fn encode_taproot_txo(
-        tx: &Transaction,
-        value: u64,
-        secret_key: SecretKey,
-        internal_key: XOnlyPublicKey,
-        script_pubkey: &ScriptBuf,
-        spend_info: &BitcoinTaprootSpendInfo,
-        leaves: Vec<TaprootLeaf>,
-    ) -> Result<TaprootTxo, String> {
-        let txid = tx.compute_txid();
-        let mut outpoint = [0u8; 32];
-        outpoint.copy_from_slice(txid.as_raw_hash().as_byte_array());
-
-        let merkle_root = spend_info.merkle_root().map(|root| *root.as_byte_array());
-
-        Ok(TaprootTxo {
-            outpoint: (outpoint, 0),
-            value,
-            spend_info: TaprootSpendInfo {
-                keypair: TaprootKeypair {
-                    secret_key: secret_key.secret_bytes(),
-                    public_key: internal_key.serialize(),
-                },
-                merkle_root,
-                output_key: spend_info.output_key().to_x_only_public_key().serialize(),
-                output_key_parity: match spend_info.output_key_parity() {
-                    bitcoin::secp256k1::Parity::Even => 0,
-                    bitcoin::secp256k1::Parity::Odd => 1,
-                },
-                script_pubkey: script_pubkey.as_bytes().to_vec(),
-                leaves,
-            },
-        })
-    }
-
-    /// Deterministically derives a secp256k1 secret key from the funding
-    /// outpoint and a counter so Taproot keypairs stay reproducible.
-    fn deterministic_secret_key(outpoint: &OutPoint, counter: u32) -> SecretKey {
-        let mut entropy = Vec::with_capacity(4 + 4 + 32);
-        entropy.extend_from_slice(outpoint.txid.as_raw_hash().as_byte_array());
-        entropy.extend_from_slice(&outpoint.vout.to_le_bytes());
-        entropy.extend_from_slice(&counter.to_le_bytes());
-        Self::secret_key_from_entropy(&entropy)
-    }
-
-    /// Hashes the provided entropy until a valid secp256k1 secret key emerges.
-    fn secret_key_from_entropy(seed: &[u8]) -> SecretKey {
-        let mut hash = sha256::Hash::hash(seed);
-        loop {
-            if let Ok(secret) = SecretKey::from_slice(hash.as_byte_array()) {
-                return secret;
-            }
-            hash = sha256::Hash::hash(hash.as_byte_array());
-        }
-    }
-
-    /// Returns the default `P CHECKSIG` tapscript used for script-path Taproot leaf plans.
-    fn build_default_tapscript(key: &XOnlyPublicKey) -> Result<ScriptBuf, String> {
-        let push = PushBytesBuf::try_from(key.serialize().to_vec())
-            .map_err(|_| "failed to encode taproot key for tapscript".to_string())?;
-        Ok(ScriptBuf::builder()
-            .push_slice(&push)
-            .push_opcode(OP_CHECKSIG)
-            .into_script())
     }
 }
 

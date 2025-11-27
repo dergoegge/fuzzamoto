@@ -60,9 +60,6 @@ pub struct FullProgramContext {
     pub txos: Vec<Txo>,
     /// List of headers present in the snapshotted state
     pub headers: Vec<Header>,
-    /// Taproot-specific data (UTXOs, scripts, keys) available to generators.
-    #[serde(default)]
-    pub taproot: TaprootContext,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
