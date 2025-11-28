@@ -34,6 +34,9 @@ pub struct BenchStatsStage<T, O> {
     last_corpus_count: usize,
     last_solution_count: usize,
 
+    // Cumulative union coverage map to report coverage% over time
+    union_map: Vec<u8>,
+
     stats_file_path: PathBuf,
     coverage_file_path: PathBuf,
     mutations_file_path: PathBuf,
@@ -61,6 +64,7 @@ impl<T, O> BenchStatsStage<T, O> {
             last_execs: 0,
             last_corpus_count: 0,
             last_solution_count: 0,
+            union_map: Vec::new(),
             stats_file_path,
             coverage_file_path,
             mutations_file_path,
@@ -112,8 +116,22 @@ where
         let map_observer = observers[&self.trace_handle].as_ref();
         let initial_entry_value = map_observer.initial();
 
-        let covered = (0..map_observer.len())
-            .filter(|idx| map_observer.get(*idx) != initial_entry_value)
+        // Ensure union map is allocated and merged with current snapshot.
+        if self.union_map.len() != map_observer.len() {
+            self.union_map = vec![0u8; map_observer.len()];
+        }
+
+        for (idx, byte) in self.union_map.iter_mut().enumerate() {
+            let val = map_observer.get(idx);
+            if val > *byte {
+                *byte = val;
+            }
+        }
+
+        let covered = self
+            .union_map
+            .iter()
+            .filter(|b| **b != initial_entry_value)
             .count();
         let coverage_pct = if map_observer.len() == 0 {
             0.0
@@ -158,21 +176,17 @@ where
         )
         .map_err(|e| libafl::Error::unknown(format!("Failed to write CSV data: {}", e)))?;
 
-        dump_coverage_map(map_observer, &self.coverage_file_path)?;
+        dump_coverage_map(&self.union_map, &self.coverage_file_path)?;
         self.record_new_mutations(state)?;
 
         Ok(())
     }
 }
 
-fn dump_coverage_map<O: MapObserver<Entry = u8>>(
-    map_observer: &O,
-    path: &PathBuf,
-) -> Result<(), libafl::Error> {
+fn dump_coverage_map(data: &[u8], path: &PathBuf) -> Result<(), libafl::Error> {
     let mut file = File::create(path)
         .map_err(|e| libafl::Error::unknown(format!("Failed to open coverage file: {e}")))?;
-    let data = map_observer.to_vec();
-    file.write_all(&data)
+    file.write_all(data)
         .map_err(|e| libafl::Error::unknown(format!("Failed to write coverage file: {e}")))?;
     Ok(())
 }
