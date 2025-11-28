@@ -5,65 +5,45 @@ use bitcoin::{
 use rand::{Rng, RngCore, seq::SliceRandom};
 
 use crate::{
-    Operation, ProgramBuilder, TaprootTxo,
+    Operation, ProgramBuilder,
     builder::IndexedVariable,
     generators::{Generator, GeneratorError, GeneratorResult},
 };
 
-/// Generates a simple transaction that spends a context Taproot UTXO via key-path.
-pub struct TaprootKeyPathGenerator {
-    available_txos: Vec<TaprootTxo>,
-}
+/// Generates a simple transaction that builds and spends a Taproot output via key-path.
+pub struct TaprootKeyPathGenerator;
 
-/// Generates a simple transaction that spends a Taproot UTXO via script-path.
-pub struct TaprootScriptPathGenerator {
-    available_txos: Vec<TaprootTxo>,
-}
+/// Generates a simple transaction that builds and spends a Taproot output via script-path.
+pub struct TaprootScriptPathGenerator;
 
-/// Builds a new multi-leaf Taproot tree and spends it via a non-default tapleaf.
-pub struct TaprootTreeSpendGenerator {
-    available_txos: Vec<TaprootTxo>,
-}
+/// Builds a new multi-leaf Taproot tree and spends it via a selected tapleaf.
+pub struct TaprootTreeSpendGenerator;
 
-impl TaprootKeyPathGenerator {
-    pub fn new(available_txos: Vec<TaprootTxo>) -> Self {
-        Self { available_txos }
+impl Default for TaprootKeyPathGenerator {
+    fn default() -> Self {
+        Self
     }
 }
 
-impl TaprootScriptPathGenerator {
-    pub fn new(available_txos: Vec<TaprootTxo>) -> Self {
-        Self {
-            available_txos: available_txos
-                .into_iter()
-                .filter(|txo| !txo.spend_info.leaves.is_empty())
-                .collect(),
-        }
+impl Default for TaprootScriptPathGenerator {
+    fn default() -> Self {
+        Self
     }
 }
 
-impl TaprootTreeSpendGenerator {
-    pub fn new(available_txos: Vec<TaprootTxo>) -> Self {
-        Self { available_txos }
+impl Default for TaprootTreeSpendGenerator {
+    fn default() -> Self {
+        Self
     }
 }
 
 impl<R: RngCore> Generator<R> for TaprootKeyPathGenerator {
     fn generate(&self, builder: &mut ProgramBuilder, rng: &mut R) -> GeneratorResult {
-        if self.available_txos.is_empty() {
+        let funding_txos = builder.get_random_utxos(rng);
+        if funding_txos.is_empty() {
             return Err(GeneratorError::MissingVariables);
         }
-        let taproot_txo = &self.available_txos[rng.gen_range(0..self.available_txos.len())];
-
-        let taproot_var = builder.force_append_expect_output(
-            vec![],
-            Operation::LoadTaprootTxo {
-                txo: taproot_txo.clone(),
-            },
-        );
-        let txo_var =
-            builder.force_append_expect_output(vec![taproot_var.index], Operation::TaprootTxoToTxo);
-        let txo_var = maybe_attach_annex(builder, rng, txo_var);
+        let funding_txo = funding_txos[rng.gen_range(0..funding_txos.len())].clone();
 
         let tx_version_var =
             builder.force_append_expect_output(vec![], Operation::LoadTxVersion(2));
@@ -79,7 +59,7 @@ impl<R: RngCore> Generator<R> for TaprootKeyPathGenerator {
         let sequence_var =
             builder.force_append_expect_output(vec![], Operation::LoadSequence(0xfffffffe));
         builder.force_append(
-            vec![mut_inputs_var.index, txo_var.index, sequence_var.index],
+            vec![mut_inputs_var.index, funding_txo.index, sequence_var.index],
             Operation::AddTxInput,
         );
         let inputs_var = builder
@@ -87,9 +67,24 @@ impl<R: RngCore> Generator<R> for TaprootKeyPathGenerator {
 
         let mut_outputs_var = builder
             .force_append_expect_output(vec![inputs_var.index], Operation::BeginBuildTxOutputs);
-        let scripts_var = builder.force_append_expect_output(vec![], Operation::BuildPayToAnchor);
-        let amount_var =
-            builder.force_append_expect_output(vec![], Operation::LoadAmount(taproot_txo.value));
+
+        let keypair_var = builder.force_append_expect_output(
+            vec![],
+            Operation::BuildTaprootKeypair {
+                secret_key: gen_secret_key_bytes(rng),
+            },
+        );
+        let mut_tree_var = builder.force_append_expect_output(vec![], Operation::BeginTaprootTree);
+        let spend_info_var = builder.force_append_expect_output(
+            vec![mut_tree_var.index, keypair_var.index],
+            Operation::EndTaprootTree {
+                selected_leaf_index: None,
+            },
+        );
+        let scripts_var = builder
+            .force_append_expect_output(vec![spend_info_var.index], Operation::BuildPayToTaproot);
+
+        let amount_var = builder.force_append_expect_output(vec![], Operation::LoadAmount(50_000));
         builder.force_append(
             vec![mut_outputs_var.index, scripts_var.index, amount_var.index],
             Operation::AddTxOutput,
@@ -102,9 +97,18 @@ impl<R: RngCore> Generator<R> for TaprootKeyPathGenerator {
             Operation::EndBuildTx,
         );
 
+        let produced_txo =
+            builder.force_append_expect_output(vec![const_tx_var.index], Operation::TakeTxo);
+
+        let child_tx = build_child_tx(builder, produced_txo, rng);
+
         let connection_var = builder.get_or_create_random_connection(rng);
         builder.force_append(
             vec![connection_var.index, const_tx_var.index],
+            Operation::SendTx,
+        );
+        builder.force_append(
+            vec![connection_var.index, child_tx.index],
             Operation::SendTx,
         );
 
@@ -118,20 +122,11 @@ impl<R: RngCore> Generator<R> for TaprootKeyPathGenerator {
 
 impl<R: RngCore> Generator<R> for TaprootScriptPathGenerator {
     fn generate(&self, builder: &mut ProgramBuilder, rng: &mut R) -> GeneratorResult {
-        if self.available_txos.is_empty() {
+        let funding_txos = builder.get_random_utxos(rng);
+        if funding_txos.is_empty() {
             return Err(GeneratorError::MissingVariables);
         }
-        let taproot_txo = &self.available_txos[rng.gen_range(0..self.available_txos.len())];
-
-        let taproot_var = builder.force_append_expect_output(
-            vec![],
-            Operation::LoadTaprootTxo {
-                txo: taproot_txo.clone(),
-            },
-        );
-        let txo_var =
-            builder.force_append_expect_output(vec![taproot_var.index], Operation::TaprootTxoToTxo);
-        let txo_with_leaf_var = maybe_attach_annex(builder, rng, txo_var);
+        let funding_txo = funding_txos[rng.gen_range(0..funding_txos.len())].clone();
 
         let tx_version_var =
             builder.force_append_expect_output(vec![], Operation::LoadTxVersion(2));
@@ -147,11 +142,7 @@ impl<R: RngCore> Generator<R> for TaprootScriptPathGenerator {
         let sequence_var =
             builder.force_append_expect_output(vec![], Operation::LoadSequence(0xfffffffe));
         builder.force_append(
-            vec![
-                mut_inputs_var.index,
-                txo_with_leaf_var.index,
-                sequence_var.index,
-            ],
+            vec![mut_inputs_var.index, funding_txo.index, sequence_var.index],
             Operation::AddTxInput,
         );
         let inputs_var = builder
@@ -159,9 +150,36 @@ impl<R: RngCore> Generator<R> for TaprootScriptPathGenerator {
 
         let mut_outputs_var = builder
             .force_append_expect_output(vec![inputs_var.index], Operation::BeginBuildTxOutputs);
-        let scripts_var = builder.force_append_expect_output(vec![], Operation::BuildPayToAnchor);
-        let amount_var =
-            builder.force_append_expect_output(vec![], Operation::LoadAmount(taproot_txo.value));
+
+        let keypair_var = builder.force_append_expect_output(
+            vec![],
+            Operation::BuildTaprootKeypair {
+                secret_key: gen_secret_key_bytes(rng),
+            },
+        );
+        let mut_tree_var = builder.force_append_expect_output(vec![], Operation::BeginTaprootTree);
+        let script_var =
+            builder.force_append_expect_output(vec![], Operation::LoadBytes(random_tapscript(rng)));
+        let version_var = builder.force_append_expect_output(
+            vec![],
+            Operation::LoadTaprootLeafVersion(LeafVersion::TapScript.to_consensus()),
+        );
+        builder.force_append(
+            vec![mut_tree_var.index, script_var.index, version_var.index],
+            Operation::AddTapLeaf {
+                depth: random_leaf_depth(rng, false),
+            },
+        );
+        let spend_info_var = builder.force_append_expect_output(
+            vec![mut_tree_var.index, keypair_var.index],
+            Operation::EndTaprootTree {
+                selected_leaf_index: Some(0),
+            },
+        );
+        let scripts_var = builder
+            .force_append_expect_output(vec![spend_info_var.index], Operation::BuildPayToTaproot);
+
+        let amount_var = builder.force_append_expect_output(vec![], Operation::LoadAmount(60_000));
         builder.force_append(
             vec![mut_outputs_var.index, scripts_var.index, amount_var.index],
             Operation::AddTxOutput,
@@ -174,9 +192,19 @@ impl<R: RngCore> Generator<R> for TaprootScriptPathGenerator {
             Operation::EndBuildTx,
         );
 
+        let produced_txo =
+            builder.force_append_expect_output(vec![const_tx_var.index], Operation::TakeTxo);
+        let produced_txo = maybe_attach_annex(builder, rng, produced_txo);
+
+        let child_tx = build_child_tx(builder, produced_txo, rng);
+
         let connection_var = builder.get_or_create_random_connection(rng);
         builder.force_append(
             vec![connection_var.index, const_tx_var.index],
+            Operation::SendTx,
+        );
+        builder.force_append(
+            vec![connection_var.index, child_tx.index],
             Operation::SendTx,
         );
 
@@ -191,25 +219,14 @@ impl<R: RngCore> Generator<R> for TaprootScriptPathGenerator {
 impl<R: RngCore> Generator<R> for TaprootTreeSpendGenerator {
     fn generate(&self, builder: &mut ProgramBuilder, rng: &mut R) -> GeneratorResult {
         const MIN_PARENT_FEE: u64 = 500; // leave room for child fees
-        let taproot_txo = self
-            .available_txos
-            .choose(rng)
-            .ok_or(GeneratorError::MissingVariables)?;
-
-        if taproot_txo.value <= MIN_PARENT_FEE {
+        let funding_txos = builder.get_random_utxos(rng);
+        if funding_txos.is_empty() {
             return Err(GeneratorError::MissingVariables);
         }
-
-        let taproot_var = builder.force_append_expect_output(
-            vec![],
-            Operation::LoadTaprootTxo {
-                txo: taproot_txo.clone(),
-            },
-        );
-        let keypair_var = builder
-            .force_append_expect_output(vec![taproot_var.index], Operation::TaprootTxoToKeypair);
-        let funding_txo_var =
-            builder.force_append_expect_output(vec![taproot_var.index], Operation::TaprootTxoToTxo);
+        let funding_txo = funding_txos
+            .choose(rng)
+            .cloned()
+            .ok_or(GeneratorError::MissingVariables)?;
 
         let mut_tree_var = builder.force_append_expect_output(vec![], Operation::BeginTaprootTree);
         let leaf_count = rng.gen_range(2..=4);
@@ -248,30 +265,34 @@ impl<R: RngCore> Generator<R> for TaprootTreeSpendGenerator {
         // Inject an additional hidden node near the deepest visible leaf so the resulting control
         // block includes multiple merkle branch hashes.
         maybe_attach_deep_hidden_node(builder, rng, mut_tree_var.index, deepest_leaf_depth);
+        let keypair_var = builder.force_append_expect_output(
+            vec![],
+            Operation::BuildTaprootKeypair {
+                secret_key: gen_secret_key_bytes(rng),
+            },
+        );
         let spend_info_var = builder.force_append_expect_output(
             vec![mut_tree_var.index, keypair_var.index],
-            Operation::EndTaprootTree,
+            Operation::EndTaprootTree {
+                selected_leaf_index: Some(1.min(leaf_count - 1) as u8),
+            },
         );
         let scripts_var = builder
             .force_append_expect_output(vec![spend_info_var.index], Operation::BuildPayToTaproot);
 
-        let parent_value = taproot_txo.value.saturating_sub(MIN_PARENT_FEE);
+        const PARENT_VALUE_SATS: u64 = 80_000;
+        let parent_value = PARENT_VALUE_SATS.saturating_sub(MIN_PARENT_FEE);
         if parent_value == 0 {
             return Err(GeneratorError::MissingVariables);
         }
         // Parent tx pays to the newly constructed Taproot output.
-        let parent_tx = build_single_output_tx(
-            builder,
-            funding_txo_var.index,
-            scripts_var.index,
-            parent_value,
-        );
+        let parent_tx =
+            build_single_output_tx(builder, funding_txo.index, scripts_var.index, parent_value);
 
         // Immediately spend that output; leaf choice is baked into spend_info (first leaf).
         let produced_txo =
             builder.force_append_expect_output(vec![parent_tx.index], Operation::TakeTxo);
-        let mut spend_txo_var = produced_txo;
-        spend_txo_var = maybe_attach_annex(builder, rng, spend_txo_var);
+        let spend_txo_var = maybe_attach_annex(builder, rng, produced_txo);
 
         let child_scripts = builder.force_append_expect_output(vec![], Operation::BuildPayToAnchor);
         let child_value = parent_value.saturating_sub(500).max(1);
@@ -314,6 +335,57 @@ fn maybe_attach_annex<R: RngCore>(
         vec![txo_var.index, annex_var.index],
         Operation::TaprootTxoUseAnnex,
     )
+}
+
+fn build_child_tx<R: RngCore>(
+    builder: &mut ProgramBuilder,
+    funding_txo: IndexedVariable,
+    rng: &mut R,
+) -> IndexedVariable {
+    let tx_version_var = builder.force_append_expect_output(vec![], Operation::LoadTxVersion(2));
+    let tx_lock_time_var = builder.force_append_expect_output(vec![], Operation::LoadLockTime(0));
+    let mut_tx_var = builder.force_append_expect_output(
+        vec![tx_version_var.index, tx_lock_time_var.index],
+        Operation::BeginBuildTx,
+    );
+
+    let mut_inputs_var = builder.force_append_expect_output(vec![], Operation::BeginBuildTxInputs);
+    let sequence_var =
+        builder.force_append_expect_output(vec![], Operation::LoadSequence(0xfffffffe));
+    builder.force_append(
+        vec![mut_inputs_var.index, funding_txo.index, sequence_var.index],
+        Operation::AddTxInput,
+    );
+    let inputs_var =
+        builder.force_append_expect_output(vec![mut_inputs_var.index], Operation::EndBuildTxInputs);
+
+    let mut_outputs_var =
+        builder.force_append_expect_output(vec![inputs_var.index], Operation::BeginBuildTxOutputs);
+    let scripts_var = builder.force_append_expect_output(vec![], Operation::BuildPayToAnchor);
+    let amount_var = builder
+        .force_append_expect_output(vec![], Operation::LoadAmount(rng.gen_range(5_000..20_000)));
+    builder.force_append(
+        vec![mut_outputs_var.index, scripts_var.index, amount_var.index],
+        Operation::AddTxOutput,
+    );
+    let outputs_var = builder
+        .force_append_expect_output(vec![mut_outputs_var.index], Operation::EndBuildTxOutputs);
+
+    builder.force_append_expect_output(
+        vec![mut_tx_var.index, inputs_var.index, outputs_var.index],
+        Operation::EndBuildTx,
+    )
+}
+
+fn gen_secret_key_bytes<R: RngCore>(rng: &mut R) -> [u8; 32] {
+    loop {
+        let mut secret = [0u8; 32];
+        rng.fill_bytes(&mut secret);
+        // secp256k1 rejects zero/>=n; let the compiler validate later, but avoid the all-zero case here.
+        if secret.iter().any(|&b| b != 0) {
+            return secret;
+        }
+    }
 }
 
 /// Build a short annex payload that satisfies the BIP341 0x50 prefix rule.
