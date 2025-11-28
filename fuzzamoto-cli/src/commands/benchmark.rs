@@ -394,6 +394,12 @@ fn aggregate_bench_stats(
         return Ok(());
     }
 
+    log::info!(
+        "found {} bench samples under {}",
+        merged.len(),
+        bench_dir.display()
+    );
+
     merged.sort_by(|a, b| a.1.elapsed_s.partial_cmp(&b.1.elapsed_s).unwrap());
 
     let mut stats_csv =

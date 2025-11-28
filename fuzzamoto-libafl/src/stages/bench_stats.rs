@@ -169,12 +169,27 @@ where
             self.csv_header_written = true;
         }
 
+        log::debug!(
+            "bench_stats: cpu={} elapsed={:.3}s execs={} cov={:.4}% corpus={}",
+            self.cpu_id,
+            elapsed,
+            total_execs,
+            coverage_pct,
+            corpus_size
+        );
+
         writeln!(
             &stats_file,
             "{:.3},{},{:.2},{:.4},{},{}",
             elapsed, total_execs, execs_per_sec, coverage_pct, corpus_size, crashes
         )
         .map_err(|e| libafl::Error::unknown(format!("Failed to write CSV data: {}", e)))?;
+
+        log::debug!(
+            "bench_stats: cpu={} dumping coverage map len={}",
+            self.cpu_id,
+            self.union_map.len()
+        );
 
         dump_coverage_map(&self.union_map, &self.coverage_file_path)?;
         self.record_new_mutations(state)?;
