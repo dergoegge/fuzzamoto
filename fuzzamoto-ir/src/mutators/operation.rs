@@ -305,11 +305,6 @@ impl<R: RngCore, M: OperationByteMutator> Mutator<R> for OperationMutator<M> {
                 self.byte_array_mutator.mutate_bytes(bytes);
                 Operation::LoadBytes(bytes.clone()) // TODO this clone is not needed
             }
-            Operation::TaprootSpendInfoSelectLeaf { index } => {
-                Operation::TaprootSpendInfoSelectLeaf {
-                    index: index.wrapping_add(rng.gen_range(1..=MAX_LEAF_OFFSET)),
-                }
-            }
             op => op.clone(),
         };
 
@@ -326,8 +321,6 @@ impl<M: OperationByteMutator> OperationMutator<M> {
         Self { byte_array_mutator }
     }
 }
-
-const MAX_LEAF_OFFSET: usize = 16;
 
 fn mutate_addr_record<R: RngCore, M: OperationByteMutator>(
     record: &AddrRecord,

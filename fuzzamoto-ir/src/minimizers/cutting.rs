@@ -45,10 +45,10 @@ impl Iterator for CuttingMinimizer {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{HashMap, HashSet};
+    use std::collections::HashMap;
 
     use super::*;
-    use crate::{Instruction, InstructionContext, Operation};
+    use crate::{Instruction, Operation};
     use rand::Rng;
 
     fn create_test_program(size: usize) -> Program {
@@ -77,7 +77,7 @@ mod tests {
 
         let mut rng = rand::thread_rng();
         let mut set = HashMap::new();
-        while let Some(program) = minimizer.next() {
+        while let Some(_program) = minimizer.next() {
             println!(
                 "current={} chopped={}",
                 minimizer.current, minimizer.chopped

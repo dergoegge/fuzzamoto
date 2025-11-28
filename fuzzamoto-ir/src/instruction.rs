@@ -70,9 +70,6 @@ impl Instruction {
             | Operation::TaprootTxoToSpendInfo
             | Operation::TaprootTxoToKeypair
             | Operation::TaprootTxoToTxo
-            | Operation::TaprootSpendInfoSelectLeaf { .. }
-            | Operation::TaprootScriptsUseLeaf
-            | Operation::TaprootTxoUseLeaf
             | Operation::TaprootScriptsUseAnnex
             | Operation::TaprootTxoUseAnnex => true,
             _ => false,
@@ -159,9 +156,6 @@ impl Instruction {
             | Operation::TaprootTxoToSpendInfo
             | Operation::TaprootTxoToKeypair
             | Operation::TaprootTxoToTxo
-            | Operation::TaprootSpendInfoSelectLeaf { .. }
-            | Operation::TaprootScriptsUseLeaf
-            | Operation::TaprootTxoUseLeaf
             | Operation::TaprootScriptsUseAnnex
             | Operation::TaprootTxoUseAnnex
             | Operation::AddTapLeaf { .. }

@@ -26,6 +26,10 @@ pub struct TaprootSpendInfo {
     pub output_key_parity: u8,
     pub script_pubkey: Vec<u8>,
     pub leaves: Vec<TaprootLeaf>,
+    /// If present, this tapleaf is the fixed script-path used to spend; otherwise key-path.
+    /// TODO: in the future, consider allowing selecting a non-first leaf at output build time to exercise multi-leaf coverage.
+    #[serde(default)]
+    pub selected_leaf: Option<TaprootLeaf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Hash)]

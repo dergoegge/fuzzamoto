@@ -105,7 +105,7 @@ enum SigningRequest {
     Taproot {
         spend_info_var: Option<usize>,
         source_taproot_txo_var: Option<usize>,
-        leaf_var: Option<usize>,
+        selected_leaf: Option<TaprootLeaf>,
         annex_var: Option<usize>,
     },
 }
@@ -261,9 +261,6 @@ impl Compiler {
                 Operation::TaprootTxoToSpendInfo
                 | Operation::TaprootTxoToKeypair
                 | Operation::TaprootTxoToTxo
-                | Operation::TaprootSpendInfoSelectLeaf { .. }
-                | Operation::TaprootScriptsUseLeaf
-                | Operation::TaprootTxoUseLeaf
                 | Operation::TaprootScriptsUseAnnex
                 | Operation::TaprootTxoUseAnnex => {
                     self.handle_taproot_conversions(&instruction)?;
@@ -748,6 +745,11 @@ impl Compiler {
             Operation::TaprootTxoToTxo => {
                 let taproot_txo = self.get_input::<TaprootTxo>(&instruction.inputs, 0)?;
                 let source_var = instruction.inputs.first().copied();
+                let selected_leaf = taproot_txo
+                    .spend_info
+                    .selected_leaf
+                    .clone()
+                    .or_else(|| taproot_txo.spend_info.leaves.first().cloned());
                 self.append_variable(Txo {
                     prev_out: taproot_txo.outpoint,
                     scripts: Scripts {
@@ -757,70 +759,12 @@ impl Compiler {
                         requires_signing: Some(SigningRequest::Taproot {
                             spend_info_var: None,
                             source_taproot_txo_var: source_var,
-                            leaf_var: None,
+                            selected_leaf,
                             annex_var: None,
                         }),
                     },
                     value: taproot_txo.value,
                 });
-            }
-            Operation::TaprootSpendInfoSelectLeaf { index } => {
-                let spend_info = self.get_input::<TaprootSpendInfo>(&instruction.inputs, 0)?;
-                if spend_info.leaves.is_empty() {
-                    return Err(CompilerError::MiscError(
-                        "taproot spend info does not contain any leaves".to_string(),
-                    ));
-                }
-                let idx = index % spend_info.leaves.len();
-                self.append_variable(spend_info.leaves[idx].clone());
-            }
-            Operation::TaprootScriptsUseLeaf => {
-                let mut scripts = self.get_input::<Scripts>(&instruction.inputs, 0)?.clone();
-                let leaf_var = instruction
-                    .inputs
-                    .get(1)
-                    .copied()
-                    .ok_or(CompilerError::IncorrectNumberOfInputs)?;
-                self.get_input::<TaprootLeaf>(&instruction.inputs, 1)?;
-
-                match &mut scripts.requires_signing {
-                    Some(SigningRequest::Taproot {
-                        leaf_var: target, ..
-                    }) => {
-                        *target = Some(leaf_var);
-                    }
-                    _ => {
-                        return Err(CompilerError::MiscError(
-                            "TaprootScriptsUseLeaf requires a taproot script".to_string(),
-                        ));
-                    }
-                }
-
-                self.append_variable(scripts);
-            }
-            Operation::TaprootTxoUseLeaf => {
-                let mut txo = self.get_input::<Txo>(&instruction.inputs, 0)?.clone();
-                let leaf_var = instruction
-                    .inputs
-                    .get(1)
-                    .copied()
-                    .ok_or(CompilerError::IncorrectNumberOfInputs)?;
-                self.get_input::<TaprootLeaf>(&instruction.inputs, 1)?;
-
-                match &mut txo.scripts.requires_signing {
-                    Some(SigningRequest::Taproot {
-                        leaf_var: target, ..
-                    }) => {
-                        *target = Some(leaf_var);
-                    }
-                    _ => {
-                        return Err(CompilerError::MiscError(
-                            "TaprootTxoUseLeaf requires a taproot script".to_string(),
-                        ));
-                    }
-                }
-
-                self.append_variable(txo);
             }
             Operation::TaprootScriptsUseAnnex => {
                 let mut scripts = self.get_input::<Scripts>(&instruction.inputs, 0)?.clone();
@@ -983,6 +927,8 @@ impl Compiler {
                     .collect::<Result<Vec<_>, CompilerError>>()?;
 
                 let merkle_root = spend_info.merkle_root().map(|root| *root.as_byte_array());
+                // TODO: make leaf choice configurable to cover non-first leaves
+                let selected_leaf = leaves.first().cloned();
                 self.append_variable(TaprootSpendInfo {
                     keypair: keypair.clone(),
                     merkle_root,
@@ -993,6 +939,7 @@ impl Compiler {
                     },
                     script_pubkey: script_pubkey.as_bytes().to_vec(),
                     leaves,
+                    selected_leaf,
                 });
             }
             _ => unreachable!("Unsupported taproot tree operation"),
@@ -1089,6 +1036,10 @@ impl Compiler {
             Operation::BuildPayToTaproot => {
                 let spend_info = self.get_input::<TaprootSpendInfo>(&instruction.inputs, 0)?;
                 let spend_info_var = instruction.inputs.first().copied();
+                let selected_leaf = spend_info
+                    .selected_leaf
+                    .clone()
+                    .or_else(|| spend_info.leaves.first().cloned());
 
                 self.append_variable(Scripts {
                     script_pubkey: spend_info.script_pubkey.clone(),
@@ -1097,7 +1048,7 @@ impl Compiler {
                     requires_signing: Some(SigningRequest::Taproot {
                         spend_info_var,
                         source_taproot_txo_var: None,
-                        leaf_var: None,
+                        selected_leaf,
                         annex_var: None,
                     }),
                 });
@@ -1948,7 +1899,7 @@ impl Compiler {
                     SigningRequest::Taproot {
                         spend_info_var,
                         source_taproot_txo_var,
-                        leaf_var,
+                        selected_leaf,
                         annex_var,
                     } => {
                         let spend_info = if let Some(var) = spend_info_var {
@@ -1980,14 +1931,9 @@ impl Compiler {
                             None
                         };
 
-                        if let Some(leaf_idx) = leaf_var {
-                            let leaf =
-                                self.get_variable::<TaprootLeaf>(*leaf_idx).map_err(|_| {
-                                    CompilerError::MiscError(
-                                        "taproot leaf variable missing for script-path spend"
-                                            .to_string(),
-                                    )
-                                })?;
+                        if let Some(leaf) =
+                            selected_leaf.as_ref().or(spend_info.selected_leaf.as_ref())
+                        {
                             let leaf_version =
                                 LeafVersion::from_consensus(leaf.version).map_err(|e| {
                                     CompilerError::MiscError(format!(
@@ -2356,14 +2302,7 @@ mod tests {
         );
         let produced =
             builder.force_append_expect_output(vec![parent_tx.index], Operation::TakeTxo);
-        let leaf_var = builder.force_append_expect_output(
-            vec![spend_info_var.index],
-            Operation::TaprootSpendInfoSelectLeaf { index: 0 },
-        );
-        let spend_txo_var = builder.force_append_expect_output(
-            vec![produced.index, leaf_var.index],
-            Operation::TaprootTxoUseLeaf,
-        );
+        let spend_txo_var = produced;
         let child_tx =
             build_single_input_transaction(&mut builder, spend_txo_var.index, parent_value - 500);
 
@@ -2469,6 +2408,7 @@ mod tests {
                 },
                 script_pubkey,
                 leaves: Vec::new(),
+                selected_leaf: None,
             },
         }
     }
@@ -2520,7 +2460,8 @@ mod tests {
                     Parity::Odd => 1,
                 },
                 script_pubkey,
-                leaves: vec![leaf],
+                leaves: vec![leaf.clone()],
+                selected_leaf: Some(leaf),
             },
         }
     }
@@ -2559,18 +2500,11 @@ mod tests {
         let connection = builder.force_append_expect_output(vec![], Operation::LoadConnection(0));
         let taproot_var = builder
             .force_append_expect_output(vec![], Operation::LoadTaprootTxo { txo: taproot_txo });
-        let spend_info_var = builder
+        let _spend_info_var = builder
             .force_append_expect_output(vec![taproot_var.index], Operation::TaprootTxoToSpendInfo);
-        let leaf_var = builder.force_append_expect_output(
-            vec![spend_info_var.index],
-            Operation::TaprootSpendInfoSelectLeaf { index: 0 },
-        );
         let txo_var =
             builder.force_append_expect_output(vec![taproot_var.index], Operation::TaprootTxoToTxo);
-        let txo_var = builder.force_append_expect_output(
-            vec![txo_var.index, leaf_var.index],
-            Operation::TaprootTxoUseLeaf,
-        );
+        let txo_var = txo_var;
         let tx = build_single_input_transaction(&mut builder, txo_var.index, 1_500);
         builder.force_append(vec![connection.index, tx.index], Operation::SendTx);
         builder.finalize().expect("valid program")

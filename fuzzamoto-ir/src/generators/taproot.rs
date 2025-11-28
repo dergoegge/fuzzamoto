@@ -129,20 +129,9 @@ impl<R: RngCore> Generator<R> for TaprootScriptPathGenerator {
                 txo: taproot_txo.clone(),
             },
         );
-        let spend_info_var = builder
-            .force_append_expect_output(vec![taproot_var.index], Operation::TaprootTxoToSpendInfo);
-        let leaf_idx = rng.gen_range(0..taproot_txo.spend_info.leaves.len());
-        let leaf_var = builder.force_append_expect_output(
-            vec![spend_info_var.index],
-            Operation::TaprootSpendInfoSelectLeaf { index: leaf_idx },
-        );
         let txo_var =
             builder.force_append_expect_output(vec![taproot_var.index], Operation::TaprootTxoToTxo);
-        let txo_with_leaf_var = builder.force_append_expect_output(
-            vec![txo_var.index, leaf_var.index],
-            Operation::TaprootTxoUseLeaf,
-        );
-        let txo_with_leaf_var = maybe_attach_annex(builder, rng, txo_with_leaf_var);
+        let txo_with_leaf_var = maybe_attach_annex(builder, rng, txo_var);
 
         let tx_version_var =
             builder.force_append_expect_output(vec![], Operation::LoadTxVersion(2));
@@ -278,22 +267,10 @@ impl<R: RngCore> Generator<R> for TaprootTreeSpendGenerator {
             parent_value,
         );
 
-        // Immediately spend that output via a different tapleaf to cover control blocks.
+        // Immediately spend that output; leaf choice is baked into spend_info (first leaf).
         let produced_txo =
             builder.force_append_expect_output(vec![parent_tx.index], Operation::TakeTxo);
-        let leaf_index = if leaf_count > 1 {
-            rng.gen_range(1..leaf_count)
-        } else {
-            0
-        };
-        let leaf_var = builder.force_append_expect_output(
-            vec![spend_info_var.index],
-            Operation::TaprootSpendInfoSelectLeaf { index: leaf_index },
-        );
-        let mut spend_txo_var = builder.force_append_expect_output(
-            vec![produced_txo.index, leaf_var.index],
-            Operation::TaprootTxoUseLeaf,
-        );
+        let mut spend_txo_var = produced_txo;
         spend_txo_var = maybe_attach_annex(builder, rng, spend_txo_var);
 
         let child_scripts = builder.force_append_expect_output(vec![], Operation::BuildPayToAnchor);
