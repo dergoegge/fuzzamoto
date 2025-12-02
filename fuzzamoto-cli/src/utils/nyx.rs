@@ -88,14 +88,7 @@ pub fn generate_nyx_config(nyx_path: &Path, sharedir: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn create_nyx_script(
-    sharedir: &Path,
-    all_deps: &[String],
-    binary_names: &[String],
-    crash_handler_name: &str,
-    scenario_name: &str,
-    secondary_bitcoind: Option<&str>,
-) -> Result<()> {
+pub fn create_nyx_script(sharedir: &Path) -> Result<()> {
     let mut script = Vec::new();
 
     script.push("chmod +x hget".to_string());
@@ -105,63 +98,28 @@ pub fn create_nyx_script(
     script.push("echo 0 > /proc/sys/kernel/printk".to_string());
     script.push("./hget hcat_no_pt hcat".to_string());
     script.push("./hget habort_no_pt habort".to_string());
+    script.push("chmod +x ./hcat".to_string());
+    script.push("chmod +x ./habort".to_string());
 
-    // Add dependencies
-    for dep in all_deps {
-        script.push(format!("./hget {} {}", dep, dep));
-    }
+    script.push("./hget container.tar container.tar".to_string());
 
-    // Make executables
-    for exe in &["habort", "hcat", "ld-linux-x86-64.so.2", crash_handler_name] {
-        script.push(format!("chmod +x {}", exe));
-    }
+    script.push("export __AFL_DEFER_FORKSRV=1".to_string()); // TODO why is this needed again?
 
-    for binary_name in binary_names {
-        script.push(format!("chmod +x {}", binary_name));
-    }
-
-    script.push("export __AFL_DEFER_FORKSRV=1".to_string());
-
-    // Network setup
+    // Enable networking through localhost
     script.push("ip addr add 127.0.0.1/8 dev lo".to_string());
     script.push("ip link set lo up".to_string());
-    script.push("ip a | ./hcat".to_string());
+    script.push("ip a | ./hcat".to_string()); // Maybe useful for debugging
 
-    // Create bitcoind proxy script
-    let asan_options = [
-        "detect_leaks=1",
-        "detect_stack_use_after_return=1",
-        "check_initialization_order=1",
-        "strict_init_order=1",
-        "log_path=/tmp/asan.log",
-        "abort_on_error=1",
-        "handle_abort=1",
-    ]
-    .join(":");
+    // Unpack the container
+    script.push("mkdir rootfs/ && tar -xf container.tar -C /tmp/rootfs".to_string());
+    script.push("mount -t proc /proc rootfs/proc/".to_string());
+    script.push("mount --rbind /sys rootfs/sys/".to_string());
+    script.push("mount --rbind /dev rootfs/dev/".to_string());
+    // Launch the init script (init.sh is expected to exist)
+    script.push("chroot /tmp/rootfs /init.sh".to_string());
+    script.push("cat rootfs/init.log | ./hcat".to_string());
 
-    let asan_options = format!("ASAN_OPTIONS={}", asan_options);
-    let crash_handler_preload = format!("LD_PRELOAD=./{}", crash_handler_name);
-    let proxy_script = format!(
-        "{} LD_LIBRARY_PATH=/tmp LD_BIND_NOW=1 {} ./bitcoind \\$@",
-        asan_options, crash_handler_preload,
-    );
-
-    script.push("echo \"#!/bin/sh\" > ./bitcoind_proxy".to_string());
-    script.push(format!("echo \"{}\" >> ./bitcoind_proxy", proxy_script));
-    script.push("chmod +x ./bitcoind_proxy".to_string());
-
-    // Run the scenario
-    script.push(format!(
-        "RUST_LOG=debug LD_LIBRARY_PATH=/tmp LD_BIND_NOW=1 ./{} ./bitcoind_proxy {} > log.txt 2>&1",
-        scenario_name,
-        secondary_bitcoind.unwrap_or("")
-    ));
-
-    // Debug info
-    script.push("cat log.txt | ./hcat".to_string());
-    script.push(
-        "./habort \"target has terminated without initializing the fuzzing agent ...\"".to_string(),
-    );
+    script.push("./habort \"$(tail rootfs/init.log)\"".to_string());
 
     let script_path = sharedir.join("fuzz_no_pt.sh");
     let script_content = script.join("\n");
