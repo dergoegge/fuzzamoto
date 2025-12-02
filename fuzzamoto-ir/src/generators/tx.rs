@@ -2,7 +2,13 @@ use crate::{
     IndexedVariable, Operation,
     generators::{Generator, ProgramBuilder},
 };
-use bitcoin::opcodes::OP_TRUE;
+use bitcoin::{
+    opcodes::{
+        OP_TRUE,
+        all::{OP_CHECKSIG, OP_PUSHNUM_1},
+    },
+    taproot::LeafVersion,
+};
 use rand::{Rng, RngCore, seq::SliceRandom};
 
 use super::{GeneratorError, GeneratorResult};
@@ -14,23 +20,26 @@ enum OutputType {
     PayToPubKey,
     PayToPubKeyHash,
     PayToWitnessPubKeyHash,
+    PayToTaproot,
     OpReturn,
 }
 
 fn get_random_output_type<R: RngCore>(rng: &mut R) -> OutputType {
-    match rng.gen_range(0..7) {
+    match rng.gen_range(0..8) {
         0 => OutputType::PayToWitnessScriptHash,
         1 => OutputType::PayToAnchor,
         2 => OutputType::PayToScriptHash,
         3 => OutputType::PayToPubKey,
         4 => OutputType::PayToPubKeyHash,
         5 => OutputType::PayToWitnessPubKeyHash,
+        6 => OutputType::PayToTaproot,
         _ => OutputType::OpReturn,
     }
 }
 
-fn build_outputs(
+fn build_outputs<R: RngCore>(
     builder: &mut ProgramBuilder,
+    rng: &mut R,
     mut_outputs_var: &IndexedVariable,
     output_amounts: &[(u64, OutputType)],
     coinbase: bool,
@@ -104,6 +113,7 @@ fn build_outputs(
                     op,
                 )
             }
+            OutputType::PayToTaproot => build_taproot_scripts(builder, rng),
         };
 
         let amount_var = builder.force_append_expect_output(vec![], Operation::LoadAmount(*amount));
@@ -123,8 +133,9 @@ fn build_outputs(
     Ok(())
 }
 
-fn build_tx(
+fn build_tx<R: RngCore>(
     builder: &mut ProgramBuilder,
+    rng: &mut R,
     funding_txos: &[IndexedVariable],
     tx_version: u32,
     output_amounts: &[(u64, OutputType)],
@@ -154,7 +165,7 @@ fn build_tx(
     let mut_outputs_var =
         builder.force_append_expect_output(vec![inputs_var.index], Operation::BeginBuildTxOutputs);
 
-    let _ = build_outputs(builder, &mut_outputs_var, output_amounts, false);
+    let _ = build_outputs(builder, rng, &mut_outputs_var, output_amounts, false);
 
     let outputs_var = builder
         .force_append_expect_output(vec![mut_outputs_var.index], Operation::EndBuildTxOutputs);
@@ -166,9 +177,22 @@ fn build_tx(
 
     // Make every output of the transaction spendable
     let mut outputs = Vec::new();
-    for _ in 0..output_amounts.len() {
-        outputs
-            .push(builder.force_append_expect_output(vec![const_tx_var.index], Operation::TakeTxo));
+    for (_, output_type) in output_amounts.iter() {
+        let mut txo_var =
+            builder.force_append_expect_output(vec![const_tx_var.index], Operation::TakeTxo);
+        if matches!(output_type, OutputType::PayToTaproot) && rng.gen_bool(0.5) {
+            let annex_var = builder.force_append_expect_output(
+                vec![],
+                Operation::LoadTaprootAnnex {
+                    annex: random_annex(rng),
+                },
+            );
+            txo_var = builder.force_append_expect_output(
+                vec![txo_var.index, annex_var.index],
+                Operation::TaprootTxoUseAnnex,
+            );
+        }
+        outputs.push(txo_var);
     }
 
     Ok((const_tx_var, outputs))
@@ -196,7 +220,7 @@ impl<R: RngCore> Generator<R> for SingleTxGenerator {
             }
             amounts
         };
-        let (const_tx_var, _) = build_tx(builder, &funding_txos, tx_version, &output_amounts)?;
+        let (const_tx_var, _) = build_tx(builder, rng, &funding_txos, tx_version, &output_amounts)?;
 
         if rng.gen_bool(0.5) {
             let conn_var = builder.get_or_create_random_connection(rng);
@@ -245,6 +269,7 @@ impl<R: RngCore> Generator<R> for OneParentOneChildGenerator {
 
         let (parent_tx_var, parent_output_vars) = build_tx(
             builder,
+            rng,
             &funding_txos,
             2,
             &[
@@ -254,6 +279,7 @@ impl<R: RngCore> Generator<R> for OneParentOneChildGenerator {
         )?;
         let (child_tx_var, _) = build_tx(
             builder,
+            rng,
             &[parent_output_vars.last().unwrap().clone()],
             2,
             &[(50_000_000, OutputType::PayToWitnessScriptHash)],
@@ -315,6 +341,7 @@ impl<R: RngCore> Generator<R> for LongChainGenerator {
         for i in 0..25 {
             let (tx_var, outputs) = build_tx(
                 builder,
+                rng,
                 &funding_txos,
                 2,
                 &[(
@@ -378,6 +405,7 @@ impl<R: RngCore> Generator<R> for LargeTxGenerator {
         for utxo in funding_txos {
             let (tx_var, _) = build_tx(
                 builder,
+                rng,
                 &[utxo.clone()],
                 2,
                 &[(10_000, OutputType::OpReturn)],
@@ -456,7 +484,7 @@ impl<R: RngCore> Generator<R> for CoinbaseTxGenerator {
             amounts
         };
 
-        let _ = build_outputs(builder, &mut_outputs_var, &output_amounts, true);
+        let _ = build_outputs(builder, rng, &mut_outputs_var, &output_amounts, true);
 
         let outputs_var = builder.force_append_expect_output(
             vec![mut_outputs_var.index],
@@ -476,6 +504,174 @@ impl<R: RngCore> Generator<R> for CoinbaseTxGenerator {
 
     fn name(&self) -> &'static str {
         "CoinbaseTxGenerator"
+    }
+}
+
+fn build_taproot_scripts<R: RngCore>(builder: &mut ProgramBuilder, rng: &mut R) -> IndexedVariable {
+    let keypair_var = builder.force_append_expect_output(
+        vec![],
+        Operation::BuildTaprootKeypair {
+            secret_key: gen_secret_key_bytes(rng),
+        },
+    );
+    let mut_tree_var = builder.force_append_expect_output(vec![], Operation::BeginTaprootTree);
+
+    // 0 leaves => key-path only spend; otherwise script-path with a selected leaf.
+    let leaf_count = if rng.gen_bool(0.5) {
+        0
+    } else {
+        rng.gen_range(1..=4)
+    };
+
+    let mut deepest_leaf_depth = 0u8;
+    if leaf_count > 0 {
+        for leaf_idx in 0..leaf_count {
+            maybe_insert_hidden_nodes(builder, rng, mut_tree_var.index);
+
+            let script_var = builder
+                .force_append_expect_output(vec![], Operation::LoadBytes(random_tapscript(rng)));
+            let (version, _) = random_leaf_version(rng);
+            let version_var = builder
+                .force_append_expect_output(vec![], Operation::LoadTaprootLeafVersion(version));
+
+            let depth = random_leaf_depth(rng, leaf_idx == 0);
+            deepest_leaf_depth = deepest_leaf_depth.max(depth);
+
+            builder.force_append(
+                vec![mut_tree_var.index, script_var.index, version_var.index],
+                Operation::AddTapLeaf { depth },
+            );
+        }
+
+        maybe_attach_deep_hidden_node(builder, rng, mut_tree_var.index, deepest_leaf_depth);
+    }
+
+    let selected_leaf_index = if leaf_count == 0 {
+        None
+    } else {
+        Some(rng.gen_range(0..leaf_count as u8))
+    };
+
+    let spend_info_var = builder.force_append_expect_output(
+        vec![mut_tree_var.index, keypair_var.index],
+        Operation::EndTaprootTree {
+            selected_leaf_index,
+        },
+    );
+
+    builder.force_append_expect_output(vec![spend_info_var.index], Operation::BuildPayToTaproot)
+}
+
+fn gen_secret_key_bytes<R: RngCore>(rng: &mut R) -> [u8; 32] {
+    loop {
+        let mut secret = [0u8; 32];
+        rng.fill_bytes(&mut secret);
+        if secret.iter().any(|&b| b != 0) {
+            return secret;
+        }
+    }
+}
+
+/// Build a short annex payload that satisfies the BIP341 0x50 prefix rule.
+fn random_annex<R: RngCore>(rng: &mut R) -> Vec<u8> {
+    let extra_len = rng.gen_range(0..=64);
+    let mut annex = Vec::with_capacity(1 + extra_len);
+    annex.push(0x50);
+    for _ in 0..extra_len {
+        annex.push(rng.r#gen());
+    }
+    annex
+}
+
+/// Returns a consensus tapleaf version plus a flag indicating whether it is non-default.
+fn random_leaf_version<R: RngCore>(rng: &mut R) -> (u8, bool) {
+    if rng.gen_bool(0.5) {
+        (LeafVersion::TapScript.to_consensus(), false)
+    } else {
+        (pick_strict_non_default_version(rng), true)
+    }
+}
+
+fn pick_strict_non_default_version<R: RngCore>(rng: &mut R) -> u8 {
+    *[0xC2u8, 0xC4, 0xC6, 0xD0].choose(rng).unwrap()
+}
+
+/// Emit lightweight tapscripts so we mix success, CHECKSIG, and OP_TRUE leaves.
+fn random_tapscript<R: RngCore>(rng: &mut R) -> Vec<u8> {
+    match rng.gen_range(0..3) {
+        0 => vec![OP_PUSHNUM_1.to_u8()],
+        1 => {
+            let mut script = Vec::with_capacity(34);
+            script.push(32);
+            for _ in 0..32 {
+                script.push(rng.r#gen());
+            }
+            script.push(OP_CHECKSIG.to_u8());
+            script
+        }
+        _ => vec![0x50],
+    }
+}
+
+fn random_leaf_depth<R: RngCore>(rng: &mut R, ensure_depth: bool) -> u8 {
+    if ensure_depth {
+        rng.gen_range(3..=5)
+    } else {
+        rng.gen_range(0..=5)
+    }
+}
+
+fn random_node_hash<R: RngCore>(rng: &mut R) -> [u8; 32] {
+    let mut hash = [0u8; 32];
+    rng.fill_bytes(&mut hash);
+    hash
+}
+
+fn maybe_insert_hidden_nodes<R: RngCore>(
+    builder: &mut ProgramBuilder,
+    rng: &mut R,
+    tree_var_index: usize,
+) {
+    const MAX_HIDDEN_NODES: usize = 2;
+    const MIN_DEPTH: u8 = 1;
+    const MAX_DEPTH: u8 = 3;
+
+    if !rng.gen_bool(0.5) {
+        return;
+    }
+
+    let hidden_count = rng.gen_range(1..=MAX_HIDDEN_NODES);
+    for _ in 0..hidden_count {
+        builder.force_append(
+            vec![tree_var_index],
+            Operation::AddTaprootHiddenNode {
+                depth: rng.gen_range(MIN_DEPTH..=MAX_DEPTH),
+                hash: random_node_hash(rng),
+            },
+        );
+    }
+}
+
+/// Add a hidden sibling near the deepest visible leaf so script-path witnesses exercise multi-hash
+/// control blocks.
+fn maybe_attach_deep_hidden_node<R: RngCore>(
+    builder: &mut ProgramBuilder,
+    rng: &mut R,
+    tree_index: usize,
+    deepest_leaf_depth: u8,
+) {
+    if deepest_leaf_depth <= 1 {
+        return;
+    }
+    let depth = deepest_leaf_depth.saturating_sub(1);
+    if rng.gen_bool(0.5) {
+        builder.force_append(
+            vec![tree_index],
+            Operation::AddTaprootHiddenNode {
+                depth,
+                hash: random_node_hash(rng),
+            },
+        );
     }
 }
 
