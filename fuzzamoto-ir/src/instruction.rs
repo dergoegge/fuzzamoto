@@ -66,6 +66,7 @@ impl Instruction {
             | Operation::BuildTaprootKeypair { .. }
             | Operation::LoadTaprootAnnex { .. }
             | Operation::LoadTaprootLeafVersion(_)
+            | Operation::AddTapLeaf { .. }
             | Operation::BuildPayToTaproot
             | Operation::TaprootScriptsUseAnnex
             | Operation::TaprootTxoUseAnnex => true,
