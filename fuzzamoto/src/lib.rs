@@ -1,3 +1,4 @@
+pub mod assertions;
 pub mod connections;
 pub mod dictionaries;
 pub mod oracles;

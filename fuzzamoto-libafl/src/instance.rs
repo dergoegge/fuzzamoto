@@ -22,7 +22,7 @@ use libafl::{
     feedbacks::{ConstFeedback, CrashFeedback, HasObserverHandle, MaxMapFeedback, TimeFeedback},
     fuzzer::{Evaluator, Fuzzer, StdFuzzer},
     mutators::{ComposedByMutations, TuneableScheduledMutator},
-    observers::{CanTrack, HitcountsMapObserver, StdMapObserver, TimeObserver},
+    observers::{CanTrack, HitcountsMapObserver, StdMapObserver, StdOutObserver, TimeObserver},
     schedulers::{
         IndexesLenTimeMinimizerScheduler, QueueScheduler, StdWeightedScheduler,
         powersched::PowerSchedule,
@@ -33,14 +33,14 @@ use libafl::{
 use libafl_bolts::{
     HasLen, Named, current_nanos,
     rands::{Rand, StdRand},
-    tuples::tuple_list,
+    tuples::{Handled, tuple_list},
 };
 use libafl_nyx::{executor::NyxExecutor, helper::NyxHelper, settings::NyxSettings};
 use rand::{SeedableRng, rngs::SmallRng};
 use typed_builder::TypedBuilder;
 
 use crate::{
-    feedbacks::CaptureTimeoutFeedback,
+    feedbacks::{CaptureTimeoutFeedback, assertions::AssertionFeedback},
     input::IrInput,
     mutators::{IrGenerator, IrMutator, IrSpliceMutator, LibAflByteMutator},
     options::FuzzerOptions,
@@ -115,6 +115,8 @@ where
         // Create an observation channel to keep track of the execution time
         let time_observer = TimeObserver::new("time");
 
+        let stdout_observer = StdOutObserver::new(Cow::Borrowed("hprintf_output")).unwrap();
+
         let map_feedback = MaxMapFeedback::new(&trace_observer);
 
         let trace_handle = map_feedback.observer_handle().clone();
@@ -139,7 +141,21 @@ where
                 ConstFeedback::new(!self.options.static_corpus),
                 // Disable coverage feedback if we're minimizing an input
                 ConstFeedback::new(self.options.minimize_input.is_none()),
-                map_feedback
+                // Every 5th instance (skipping 0) has coverage feedback disabled
+                ConstFeedback::new(self.client_description.core_id().0 % 5 != 1),
+                map_feedback,
+            ),
+            feedback_and_fast!(
+                // Disable coverage feedback if the corpus is static
+                ConstFeedback::new(!self.options.static_corpus),
+                // Disable coverage feedback if we're minimizing an input
+                ConstFeedback::new(self.options.minimize_input.is_none()),
+                AssertionFeedback::new(
+                    &stdout_observer,
+                    self.options
+                        .output_dir(self.client_description.core_id())
+                        .join("assertions.txt")
+                ),
             ),
             // Time feedback
             TimeFeedback::new(&time_observer),
@@ -160,11 +176,15 @@ where
         // A feedback to choose if an input is a solution or not
         let mut objective = feedback_and!(
             feedback_or_fast!(
+                // Crashes
                 CrashFeedback::new(),
+                // Hangs
                 feedback_and!(
                     ConstFeedback::new(!self.options.ignore_hangs),
                     capture_timeout_feedback,
-                )
+                ),
+                // Always assertions failing are considered a bug
+                AssertionFeedback::new_only_always(&stdout_observer),
             ),
             // Only store objective if it triggers new coverage (compared to other solutions)
             MaxMapFeedback::with_name("mapfeedback_metadata_objective", &trace_observer)
@@ -208,7 +228,8 @@ where
             )
         };
 
-        let observers = tuple_list!(trace_observer, time_observer); // stdout_observer);
+        let stdout_observer_handle = stdout_observer.handle();
+        let observers = tuple_list!(trace_observer, time_observer, stdout_observer);
 
         state.set_max_size(self.options.buffer_size);
 
@@ -218,7 +239,9 @@ where
         if let Some(rerun_input) = &self.options.rerun_input {
             let input = IrInput::unparse(rerun_input);
 
-            let mut executor = NyxExecutor::builder().build(helper, observers);
+            let mut executor = NyxExecutor::builder()
+                .stdout(stdout_observer_handle)
+                .build(helper, observers);
 
             let exit_kind = executor
                 .run_target(
@@ -228,12 +251,15 @@ where
                     &input,
                 )
                 .expect("Error running target");
+
             println!("Rerun finished with ExitKind {:?}", exit_kind);
             // We're done :)
             process::exit(0);
         }
 
-        let mut executor = NyxExecutor::builder().build(helper, observers);
+        let mut executor = NyxExecutor::builder()
+            .stdout(stdout_observer_handle)
+            .build(helper, observers);
 
         let ir_context_dump = self.options.work_dir().join("dump/ir.context");
         let bytes = std::fs::read(ir_context_dump).expect("Could not read ir context file");
