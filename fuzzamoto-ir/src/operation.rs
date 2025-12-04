@@ -828,7 +828,7 @@ impl Operation {
             Operation::BeginBlockTransactions => vec![],
             Operation::AddTx => vec![],
             Operation::EndBlockTransactions => vec![Variable::ConstBlockTransactions],
-            Operation::BuildBlock => vec![Variable::Header, Variable::Block],
+            Operation::BuildBlock => vec![Variable::Header, Variable::Block, Variable::ConstTx],
 
             Operation::SendTx => vec![],
             Operation::SendTxNoWit => vec![],
