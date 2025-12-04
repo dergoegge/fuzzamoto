@@ -926,61 +926,44 @@ fn render_compare_series(
     coverage_title: &str,
     corpus_title: &str,
 ) -> String {
-    // Compare two sets of Series: plots baseline vs candidate coverage/corpus.
-    format!(
-        r#"<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <title>{title}</title>
-  <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.29.1/plotly.min.js"></script>
-  <style>
-    body {{ font-family: sans-serif; margin: 16px; }}
-    .chart {{ width: 100%; max-width: 1100px; height: 420px; margin-bottom: 28px; }}
-  </style>
-</head>
-<body>
-  <h1>{title}</h1>
+    let body = r#"
   <div id="cov" class="chart"></div>
   <div id="corpus" class="chart"></div>
-  <script>
-    const base = {base};
-    const cand = {cand};
+"#;
+    let script = r#"
+    const base = __BASE__;
+    const cand = __CAND__;
 
-    function plot(div, field, plotTitle, yTitle) {{
+    function plot(div, field, plotTitle, yTitle) {
       Plotly.newPlot(div, [
-        {{
+        {
           x: base.elapsed,
           y: base[field],
           mode: 'lines',
           name: 'baseline'
-        }},
-        {{
+        },
+        {
           x: cand.elapsed,
           y: cand[field],
           mode: 'lines',
           name: 'candidate'
-        }}
-      ], {{
+        }
+      ], {
         title: plotTitle,
-        xaxis: {{ title: 'Elapsed (s)' }},
-        yaxis: {{ title: yTitle }},
-        legend: {{ orientation: 'h' }}
-      }});
-    }}
+        xaxis: { title: 'Elapsed (s)' },
+        yaxis: { title: yTitle },
+        legend: { orientation: 'h' }
+      });
+    }
 
-    plot('cov', 'coverage_mean', '{cov_title}', 'Coverage (%)');
-    plot('corpus', 'corpus_mean', '{corpus_title}', 'Corpus size');
-  </script>
-</body>
-</html>
-"#,
-        title = title,
-        base = base_series_json,
-        cand = cand_series_json,
-        cov_title = coverage_title,
-        corpus_title = corpus_title
-    )
+    plot('cov', 'coverage_mean', '__COV_TITLE__', 'Coverage (%)');
+    plot('corpus', 'corpus_mean', '__CORPUS_TITLE__', 'Corpus size');
+    "#
+    .replace("__BASE__", base_series_json)
+    .replace("__CAND__", cand_series_json)
+    .replace("__COV_TITLE__", coverage_title)
+    .replace("__CORPUS_TITLE__", corpus_title);
+    render_plotly_page(title, body, &script)
 }
 
 fn write_run_report(run_dir: &Path) -> Result<()> {
@@ -1093,28 +1076,17 @@ fn write_run_report_html(
 
 /// Render run-level report with time-series plus relcov/histogram (if available in summary).
 fn render_run_report(title: &str, series_json: &str, summary_json: &str) -> String {
-    const TEMPLATE: &str = r#"<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <title>__TITLE__</title>
-  <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.29.1/plotly.min.js"></script>
-  <style>
-    body { font-family: sans-serif; margin: 16px; }
-    .chart { width: 100%; max-width: 1100px; height: 420px; margin-bottom: 28px; }
-  </style>
-</head>
-<body>
-  <h1>__TITLE__</h1>
+    let body = r#"
   <div id="coverage" class="chart"></div>
   <div id="corpus" class="chart"></div>
   <div id="edge_hist" class="chart"></div>
   <div id="relcov" class="chart"></div>
-  <script>
+"#;
+
+    let script = r#"
     const series = __SERIES__;
     const summary = __SUMMARY__;
 
-    // Coverage/Corpus time series
     const chartSpecs = [
       { div: 'coverage', field: 'coverage', title: 'Coverage (%) vs Time', y: 'Coverage (%)' },
       { div: 'corpus',   field: 'corpus',   title: 'Corpus Size vs Time', y: 'Corpus size'   },
@@ -1134,7 +1106,6 @@ fn render_run_report(title: &str, series_json: &str, summary_json: &str) -> Stri
       });
     });
 
-    // Edge histogram
     if (summary.edge_histogram) {
       Plotly.newPlot('edge_hist', [{
         type: 'bar',
@@ -1149,7 +1120,6 @@ fn render_run_report(title: &str, series_json: &str, summary_json: &str) -> Stri
       });
     }
 
-    // Per-CPU relcov
     if (summary.per_cpu_relcov) {
       Plotly.newPlot('relcov', [{
         type: 'bar',
@@ -1163,15 +1133,10 @@ fn render_run_report(title: &str, series_json: &str, summary_json: &str) -> Stri
         legend: {orientation: 'h'}
       });
     }
-  </script>
-</body>
-</html>
-"#;
+    "#.replace("__SERIES__", series_json)
+        .replace("__SUMMARY__", summary_json);
 
-    TEMPLATE
-        .replace("__TITLE__", title)
-        .replace("__SERIES__", series_json)
-        .replace("__SUMMARY__", summary_json)
+    render_plotly_page(title, body, &script)
 }
 
 /// Render suite-level report with mean coverage/corpus and optional suite-level histogram/relcov.
@@ -1188,25 +1153,15 @@ fn render_suite_report(
         .map(|r| serde_json::to_string(r).unwrap_or_else(|_| "null".into()))
         .unwrap_or_else(|| "null".into());
 
-    const TEMPLATE: &str = r#"<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <title>Fuzzamoto Bench Suite Report</title>
-  <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.29.1/plotly.min.js"></script>
-  <style>
-    body { font-family: sans-serif; margin: 16px; }
-    .chart { width: 100%; max-width: 1100px; height: 420px; margin-bottom: 28px; }
-  </style>
-</head>
-<body>
-  <h1>Fuzzamoto Bench Suite Report</h1>
+    let body = r#"
   <div id="suite_coverage" class="chart"></div>
   <div id="suite_corpus" class="chart"></div>
   <div id="suite_edge_hist" class="chart"></div>
   <div id="suite_relcov" class="chart"></div>
-  <script>
-    const series = __SUITE_SERIES__;
+"#;
+
+    let script = r#"
+    const series = __SERIES__;
     const hist = __HIST__;
     const relcov = __RELCOV__;
 
@@ -1261,15 +1216,41 @@ fn render_suite_report(
         legend: {orientation: 'h'}
       });
     }
+    "#
+    .replace("__SERIES__", &suite_series_json)
+    .replace("__HIST__", &hist_json)
+    .replace("__RELCOV__", &relcov_json);
+
+    render_plotly_page("Fuzzamoto Bench Suite Report", body, &script)
+}
+
+/// Shared Plotly page template
+fn render_plotly_page(title: &str, body: &str, script: &str) -> String {
+    format!(
+        r#"<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>{title}</title>
+  <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.29.1/plotly.min.js"></script>
+  <style>
+    body {{ font-family: sans-serif; margin: 16px; }}
+    .chart {{ width: 100%; max-width: 1100px; height: 420px; margin-bottom: 28px; }}
+  </style>
+</head>
+<body>
+  <h1>{title}</h1>
+{body}
+  <script>
+{script}
   </script>
 </body>
 </html>
-"#;
-
-    TEMPLATE
-        .replace("__SUITE_SERIES__", &suite_series_json)
-        .replace("__HIST__", &hist_json)
-        .replace("__RELCOV__", &relcov_json)
+"#,
+        title = title,
+        body = body,
+        script = script
+    )
 }
 fn compare_runs(
     baseline_dir: &Path,
