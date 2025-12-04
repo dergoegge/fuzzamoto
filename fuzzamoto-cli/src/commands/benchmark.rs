@@ -95,8 +95,6 @@ struct BenchmarkConfig {
     fuzzer_path: Option<PathBuf>,
     #[serde(default = "default_bench_snapshot_secs")]
     bench_snapshot_secs: u64,
-    #[serde(default = "default_bench_store_bitmaps")]
-    bench_store_bitmaps: bool,
 }
 
 fn default_timeout_ms() -> u64 {
@@ -105,10 +103,6 @@ fn default_timeout_ms() -> u64 {
 
 fn default_bench_snapshot_secs() -> u64 {
     30
-}
-
-fn default_bench_store_bitmaps() -> bool {
-    true
 }
 
 fn run_suite(suite: &PathBuf, output: &PathBuf, write_html: bool) -> Result<()> {
@@ -168,7 +162,8 @@ fn run_single(
         .as_ref()
         .map_or_else(|| PathBuf::from(DEFAULT_FUZZER_PATH), Clone::clone);
 
-    let mut child = Command::new(&fuzzer_path)
+    let mut command = Command::new(&fuzzer_path);
+    command
         .arg("--input")
         .arg(&input_dir)
         .arg("--output")
@@ -180,11 +175,9 @@ fn run_single(
         .arg("--timeout")
         .arg(config.timeout_ms.to_string())
         .arg("--bench-snapshot-secs")
-        .arg(config.bench_snapshot_secs.to_string())
-        .arg(format!(
-            "--bench-store-bitmaps={}",
-            config.bench_store_bitmaps
-        ))
+        .arg(config.bench_snapshot_secs.to_string());
+
+    let mut child = command
         .stdout(Stdio::from(log_file))
         .stderr(Stdio::from(log_clone))
         .spawn()
@@ -431,7 +424,6 @@ fn aggregate_bench_stats(
         corpus_seed: path_to_string(&config.corpus_seed),
         fuzzer_path: path_to_string(fuzzer_path),
         bench_snapshot_secs: config.bench_snapshot_secs,
-        bench_store_bitmaps: config.bench_store_bitmaps,
         git_commit: git_commit_hash(),
     });
 
@@ -497,7 +489,6 @@ struct BenchMetadata {
     corpus_seed: String,
     fuzzer_path: String,
     bench_snapshot_secs: u64,
-    bench_store_bitmaps: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     git_commit: Option<String>,
 }
@@ -1039,10 +1030,6 @@ fn write_run_report(run_dir: &Path) -> Result<()> {
         report.push_str(&format!(
             "  - Bench snapshot interval (s): {}\n",
             meta.bench_snapshot_secs
-        ));
-        report.push_str(&format!(
-            "  - Bench store bitmaps: {}\n",
-            meta.bench_store_bitmaps
         ));
         if let Some(commit) = &meta.git_commit {
             report.push_str(&format!("  - Git commit: {}\n", commit));

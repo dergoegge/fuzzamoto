@@ -130,7 +130,6 @@ where
                 "bench-cpu_{:03}.csv",
                 self.client_description.core_id().0
             )),
-            self.options.bench_store_bitmaps(),
         );
         #[cfg(not(feature = "bench"))]
         let bench_stats_stage = NopStage::new();

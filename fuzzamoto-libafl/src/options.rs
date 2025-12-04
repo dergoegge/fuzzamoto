@@ -123,14 +123,6 @@ pub struct FuzzerOptions {
         default_value_t = 30
     )]
     pub bench_snapshot_secs: u64,
-
-    #[cfg(feature = "bench")]
-    #[arg(
-        long,
-        help = "Store per-interval coverage bitmaps for relcov/histogram",
-        default_value_t = true
-    )]
-    pub bench_store_bitmaps: bool,
 }
 
 impl FuzzerOptions {
@@ -158,11 +150,6 @@ impl FuzzerOptions {
     #[cfg(feature = "bench")]
     pub fn bench_snapshot_secs(&self) -> u64 {
         self.bench_snapshot_secs
-    }
-
-    #[cfg(feature = "bench")]
-    pub fn bench_store_bitmaps(&self) -> bool {
-        self.bench_store_bitmaps
     }
 
     pub fn queue_dir(&self, core_id: CoreId) -> PathBuf {
