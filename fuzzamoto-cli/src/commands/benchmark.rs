@@ -181,8 +181,10 @@ fn run_single(
         .arg(config.timeout_ms.to_string())
         .arg("--bench-snapshot-secs")
         .arg(config.bench_snapshot_secs.to_string())
-        .arg("--bench-store-bitmaps")
-        .arg(config.bench_store_bitmaps.to_string())
+        .arg(format!(
+            "--bench-store-bitmaps={}",
+            config.bench_store_bitmaps
+        ))
         .stdout(Stdio::from(log_file))
         .stderr(Stdio::from(log_clone))
         .spawn()
