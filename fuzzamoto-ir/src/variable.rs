@@ -60,4 +60,10 @@ pub enum Variable {
 
     CoinbaseInput,
     CoinbaseTx,
+    TaprootSpendInfo,
+    TaprootKeypair,
+    TaprootLeaf,
+    TaprootLeafVersion,
+    MutTaprootTree,
+    TaprootAnnex,
 }

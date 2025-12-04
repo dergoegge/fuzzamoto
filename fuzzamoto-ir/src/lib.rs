@@ -18,6 +18,7 @@ pub use minimizers::*;
 pub use mutators::*;
 pub use operation::*;
 
+pub use fuzzamoto::taproot::*;
 use rand::{RngCore, seq::IteratorRandom};
 pub use variable::*;
 

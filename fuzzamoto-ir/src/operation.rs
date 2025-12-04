@@ -38,6 +38,12 @@ pub enum Operation {
         spending_script_sig: Vec<u8>,
         spending_witness: Vec<Vec<u8>>,
     },
+    BuildTaprootKeypair {
+        secret_key: [u8; 32],
+    },
+    LoadTaprootAnnex {
+        annex: Vec<u8>,
+    },
     LoadHeader {
         prev: [u8; 32],
         merkle_root: [u8; 32],
@@ -79,6 +85,7 @@ pub enum Operation {
     BuildPayToScriptHash,
     BuildOpReturnScripts,
     BuildPayToAnchor,
+    BuildPayToTaproot,
 
     // cmpctblock building operations
     BuildCompactBlock,
@@ -157,10 +164,26 @@ pub enum Operation {
     SendFilterLoad,
     SendFilterAdd,
     SendFilterClear,
-    SendCompactBlock, // TODO: SendGetBlockTxn
-                      // TODO: SendBlockTxn
-                      // TODO: SendGetBlocks
-                      // TODO: SendGetHeaders
+    SendCompactBlock,
+
+    TaprootScriptsUseAnnex,
+    TaprootTxoUseAnnex,
+    BeginTaprootTree,
+    AddTapLeaf {
+        depth: u8,
+    },
+    AddTaprootHiddenNode {
+        depth: u8,
+        hash: [u8; 32],
+    },
+    EndTaprootTree {
+        selected_leaf_index: Option<u8>,
+    },
+    LoadTaprootLeafVersion(u8),
+    // TODO: SendGetBlockTxn
+    // TODO: SendBlockTxn
+    // TODO: SendGetBlocks
+    // TODO: SendGetHeaders
 }
 
 impl fmt::Display for Operation {
@@ -218,6 +241,7 @@ impl fmt::Display for Operation {
             Operation::BuildPayToScriptHash => write!(f, "BuildPayToScriptHash"),
             Operation::BuildOpReturnScripts => write!(f, "BuildOpReturnScripts"),
             Operation::BuildPayToAnchor => write!(f, "BuildPayToAnchor"),
+            Operation::BuildPayToTaproot => write!(f, "BuildPayToTaproot"),
             Operation::BuildPayToPubKey => write!(f, "BuildPayToPubKey"),
             Operation::BuildPayToPubKeyHash => write!(f, "BuildPayToPubKeyHash"),
             Operation::BuildPayToWitnessPubKeyHash => write!(f, "BuildPayToWitnessPubKeyHash"),
@@ -237,6 +261,12 @@ impl fmt::Display for Operation {
                 hex_string(&spending_script_sig),
                 hex_witness_stack(&spending_witness),
             ),
+            Operation::BuildTaprootKeypair { secret_key } => {
+                write!(f, "BuildTaprootKeypair({})", hex_string(secret_key))
+            }
+            Operation::LoadTaprootAnnex { annex } => {
+                write!(f, "LoadTaprootAnnex({})", hex_string(annex))
+            }
             Operation::LoadHeader {
                 prev,
                 merkle_root,
@@ -355,6 +385,25 @@ impl fmt::Display for Operation {
             Operation::SendFilterAdd => write!(f, "SendFilterAdd"),
             Operation::SendFilterClear => write!(f, "SendFilterClear"),
             Operation::SendCompactBlock => write!(f, "SendCompactBlock"),
+            Operation::TaprootScriptsUseAnnex => write!(f, "TaprootScriptsUseAnnex"),
+            Operation::TaprootTxoUseAnnex => write!(f, "TaprootTxoUseAnnex"),
+            Operation::BeginTaprootTree => write!(f, "BeginTaprootTree"),
+            Operation::AddTapLeaf { depth } => write!(f, "AddTapLeaf({})", depth),
+            Operation::AddTaprootHiddenNode { depth, hash } => {
+                write!(f, "AddTaprootHiddenNode({}, {})", depth, hex_string(hash))
+            }
+            Operation::EndTaprootTree {
+                selected_leaf_index,
+            } => {
+                if let Some(idx) = selected_leaf_index {
+                    write!(f, "EndTaprootTree(select={})", idx)
+                } else {
+                    write!(f, "EndTaprootTree")
+                }
+            }
+            Operation::LoadTaprootLeafVersion(version) => {
+                write!(f, "LoadTaprootLeafVersion({})", version)
+            }
         }
     }
 }
@@ -384,6 +433,8 @@ impl Operation {
             Operation::AddTx if index == 0 => true,
             Operation::AddAddr if index == 0 => true,
             Operation::AddAddrV2 if index == 0 => true,
+            Operation::AddTapLeaf { .. } if index == 0 => true,
+            Operation::AddTaprootHiddenNode { .. } if index == 0 => true,
             _ => false,
         }
     }
@@ -401,6 +452,7 @@ impl Operation {
             | Operation::BeginBuildFilterLoad
             | Operation::BeginBuildCoinbaseTx
             | Operation::BeginBuildCoinbaseTxOutputs => true,
+            Operation::BeginTaprootTree => true,
             // Exhaustive match to fail when new ops are added
             Operation::Nop { .. }
             | Operation::LoadBytes(_)
@@ -422,10 +474,13 @@ impl Operation {
             | Operation::BuildPayToScriptHash
             | Operation::BuildOpReturnScripts
             | Operation::BuildPayToAnchor
+            | Operation::BuildPayToTaproot
             | Operation::BuildPayToPubKey
             | Operation::BuildPayToPubKeyHash
             | Operation::BuildPayToWitnessPubKeyHash
             | Operation::LoadTxo { .. }
+            | Operation::BuildTaprootKeypair { .. }
+            | Operation::LoadTaprootAnnex { .. }
             | Operation::LoadHeader { .. }
             | Operation::LoadAmount(..)
             | Operation::LoadTxVersion(..)
@@ -436,6 +491,7 @@ impl Operation {
             | Operation::LoadSigHashFlags(..)
             | Operation::LoadFilterLoad { .. }
             | Operation::LoadFilterAdd { .. }
+            | Operation::LoadTaprootLeafVersion(_)
             | Operation::EndBuildFilterLoad
             | Operation::AddTxToFilter
             | Operation::AddTxoToFilter
@@ -487,6 +543,11 @@ impl Operation {
             | Operation::EndBuildCoinbaseTxOutputs
             | Operation::BuildCoinbaseTxInput
             | Operation::AddCoinbaseTxOutput => false,
+            Operation::TaprootScriptsUseAnnex
+            | Operation::TaprootTxoUseAnnex
+            | Operation::AddTapLeaf { .. }
+            | Operation::AddTaprootHiddenNode { .. }
+            | Operation::EndTaprootTree { .. } => false,
         }
     }
 
@@ -512,6 +573,7 @@ impl Operation {
             | (Operation::BeginBuildCoinbaseTxOutputs, Operation::EndBuildCoinbaseTxOutputs) => {
                 true
             }
+            (Operation::BeginTaprootTree, Operation::EndTaprootTree { .. }) => true,
             _ => false,
         }
     }
@@ -529,6 +591,7 @@ impl Operation {
             | Operation::EndBuildFilterLoad
             | Operation::EndBuildCoinbaseTx
             | Operation::EndBuildCoinbaseTxOutputs => true,
+            Operation::EndTaprootTree { .. } => true,
             // Exhaustive match to fail when new ops are added
             Operation::Nop { .. }
             | Operation::LoadBytes(_)
@@ -550,10 +613,13 @@ impl Operation {
             | Operation::BuildPayToScriptHash
             | Operation::BuildOpReturnScripts
             | Operation::BuildPayToAnchor
+            | Operation::BuildPayToTaproot
             | Operation::BuildPayToPubKey
             | Operation::BuildPayToPubKeyHash
             | Operation::BuildPayToWitnessPubKeyHash
             | Operation::LoadTxo { .. }
+            | Operation::BuildTaprootKeypair { .. }
+            | Operation::LoadTaprootAnnex { .. }
             | Operation::LoadHeader { .. }
             | Operation::LoadAmount(..)
             | Operation::LoadTxVersion(..)
@@ -565,6 +631,12 @@ impl Operation {
             | Operation::LoadFilterLoad { .. }
             | Operation::LoadFilterAdd { .. }
             | Operation::LoadNonce(..)
+            | Operation::LoadTaprootLeafVersion(_)
+            | Operation::TaprootScriptsUseAnnex
+            | Operation::TaprootTxoUseAnnex
+            | Operation::BeginTaprootTree
+            | Operation::AddTapLeaf { .. }
+            | Operation::AddTaprootHiddenNode { .. }
             | Operation::BeginBuildTx
             | Operation::BeginBuildTxInputs
             | Operation::BeginBuildTxOutputs
@@ -677,11 +749,14 @@ impl Operation {
             Operation::BuildRawScripts => vec![Variable::Scripts],
             Operation::BuildOpReturnScripts => vec![Variable::Scripts],
             Operation::BuildPayToAnchor => vec![Variable::Scripts],
+            Operation::BuildPayToTaproot => vec![Variable::Scripts],
             Operation::BuildPayToPubKey => vec![Variable::Scripts],
             Operation::BuildPayToPubKeyHash => vec![Variable::Scripts],
             Operation::BuildPayToWitnessPubKeyHash => vec![Variable::Scripts],
 
             Operation::LoadTxo { .. } => vec![Variable::Txo],
+            Operation::BuildTaprootKeypair { .. } => vec![Variable::TaprootKeypair],
+            Operation::LoadTaprootAnnex { .. } => vec![Variable::TaprootAnnex],
             Operation::LoadAmount(..) => vec![Variable::ConstAmount],
             Operation::LoadTxVersion(..) => vec![Variable::TxVersion],
             Operation::LoadBlockVersion(..) => vec![Variable::BlockVersion],
@@ -742,10 +817,18 @@ impl Operation {
             Operation::EndWitnessStack => vec![Variable::ConstWitnessStack],
             Operation::AddWitness => vec![],
 
-            Operation::BuildBlock => vec![Variable::Header, Variable::Block, Variable::ConstTx],
+            Operation::TaprootScriptsUseAnnex => vec![Variable::Scripts],
+            Operation::TaprootTxoUseAnnex => vec![Variable::Txo],
+            Operation::BeginTaprootTree => vec![],
+            Operation::AddTapLeaf { .. } => vec![],
+            Operation::AddTaprootHiddenNode { .. } => vec![],
+            Operation::EndTaprootTree { .. } => vec![Variable::TaprootSpendInfo],
+            Operation::LoadTaprootLeafVersion(_) => vec![Variable::TaprootLeafVersion],
+
+            Operation::BeginBlockTransactions => vec![],
             Operation::AddTx => vec![],
             Operation::EndBlockTransactions => vec![Variable::ConstBlockTransactions],
-            Operation::BeginBlockTransactions => vec![],
+            Operation::BuildBlock => vec![Variable::Header, Variable::Block, Variable::ConstTx],
 
             Operation::SendTx => vec![],
             Operation::SendTxNoWit => vec![],
@@ -789,6 +872,7 @@ impl Operation {
             Operation::BuildPayToWitnessPubKeyHash => {
                 vec![Variable::PrivateKey, Variable::SigHashFlags]
             }
+            Operation::BuildPayToTaproot => vec![Variable::TaprootSpendInfo],
             Operation::BeginBuildTx => vec![Variable::TxVersion, Variable::LockTime],
             Operation::EndBuildTx => vec![
                 Variable::MutTx,
@@ -876,6 +960,7 @@ impl Operation {
             ],
 
             Operation::BeginBuildFilterLoad => vec![Variable::ConstFilterLoad],
+            Operation::BeginTaprootTree => vec![],
             Operation::AddTxToFilter => vec![Variable::MutFilterLoad, Variable::ConstTx],
             Operation::AddTxoToFilter => vec![Variable::MutFilterLoad, Variable::Txo],
             Operation::EndBuildFilterLoad => vec![Variable::MutFilterLoad],
@@ -888,6 +973,19 @@ impl Operation {
             Operation::SendFilterAdd => vec![Variable::Connection, Variable::FilterAdd],
             Operation::SendFilterClear => vec![Variable::Connection],
             Operation::SendCompactBlock => vec![Variable::Connection, Variable::CompactBlock],
+            Operation::TaprootScriptsUseAnnex => {
+                vec![Variable::Scripts, Variable::TaprootAnnex]
+            }
+            Operation::TaprootTxoUseAnnex => vec![Variable::Txo, Variable::TaprootAnnex],
+            Operation::EndTaprootTree { .. } => {
+                vec![Variable::MutTaprootTree, Variable::TaprootKeypair]
+            }
+            Operation::AddTapLeaf { .. } => vec![
+                Variable::MutTaprootTree,
+                Variable::Bytes,
+                Variable::TaprootLeafVersion,
+            ],
+            Operation::AddTaprootHiddenNode { .. } => vec![Variable::MutTaprootTree],
             // Operations with no inputs
             Operation::Nop { .. }
             | Operation::LoadBytes(_)
@@ -901,6 +999,8 @@ impl Operation {
             | Operation::LoadCompactFilterType(_)
             | Operation::LoadTime(_)
             | Operation::LoadTxo { .. }
+            | Operation::BuildTaprootKeypair { .. }
+            | Operation::LoadTaprootAnnex { .. }
             | Operation::LoadHeader { .. }
             | Operation::LoadAmount(..)
             | Operation::LoadTxVersion(..)
@@ -919,6 +1019,7 @@ impl Operation {
             | Operation::BeginBuildAddrListV2
             | Operation::BeginBlockTransactions
             | Operation::BeginWitnessStack
+            | Operation::LoadTaprootLeafVersion(_)
             | Operation::BuildPayToAnchor => vec![],
         }
     }
@@ -936,6 +1037,7 @@ impl Operation {
             Operation::BeginBuildFilterLoad => vec![Variable::MutFilterLoad],
             Operation::BeginBuildCoinbaseTx => vec![Variable::MutTx],
             Operation::BeginBuildCoinbaseTxOutputs => vec![Variable::MutTxOutputs],
+            Operation::BeginTaprootTree => vec![Variable::MutTaprootTree],
             Operation::Nop {
                 outputs: _,
                 inner_outputs,
@@ -959,6 +1061,7 @@ impl Operation {
             | Operation::BuildPayToScriptHash
             | Operation::BuildOpReturnScripts
             | Operation::BuildPayToAnchor
+            | Operation::BuildPayToTaproot
             | Operation::BuildPayToPubKey
             | Operation::BuildPayToPubKeyHash
             | Operation::BuildPayToWitnessPubKeyHash
@@ -968,6 +1071,8 @@ impl Operation {
             | Operation::BuildFilterAddFromTx
             | Operation::BuildFilterAddFromTxo
             | Operation::LoadTxo { .. }
+            | Operation::BuildTaprootKeypair { .. }
+            | Operation::LoadTaprootAnnex { .. }
             | Operation::LoadHeader { .. }
             | Operation::LoadAmount(..)
             | Operation::LoadTxVersion(..)
@@ -981,6 +1086,9 @@ impl Operation {
             | Operation::LoadFilterAdd { .. }
             | Operation::LoadNonce(..)
             | Operation::BuildCompactBlock
+            | Operation::LoadTaprootLeafVersion(_)
+            | Operation::TaprootScriptsUseAnnex
+            | Operation::TaprootTxoUseAnnex
             | Operation::EndBuildTx
             | Operation::EndBuildTxInputs
             | Operation::EndBuildTxOutputs
@@ -992,6 +1100,9 @@ impl Operation {
             | Operation::EndBuildInventory
             | Operation::EndBuildAddrList
             | Operation::EndBuildAddrListV2
+            | Operation::AddTapLeaf { .. }
+            | Operation::AddTaprootHiddenNode { .. }
+            | Operation::EndTaprootTree { .. }
             | Operation::AddCompactBlockInv
             | Operation::AddTxidInv
             | Operation::AddTxidWithWitnessInv
