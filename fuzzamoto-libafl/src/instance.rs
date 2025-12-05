@@ -1,12 +1,12 @@
 use std::{borrow::Cow, cell::RefCell, marker::PhantomData, process, rc::Rc, time::Duration};
 
 use fuzzamoto_ir::{
-    AddTxToBlockGenerator, AddrRelayGenerator, AddrRelayV2Generator, AdvanceTimeGenerator,
-    BlockGenerator, BloomFilterAddGenerator, BloomFilterClearGenerator, BloomFilterLoadGenerator,
-    CombineMutator, CompactBlockGenerator, CompactFilterQueryGenerator, GetAddrGenerator,
-    GetDataGenerator, HeaderGenerator, InputMutator, InventoryGenerator, LargeTxGenerator,
-    LongChainGenerator, OneParentOneChildGenerator, OperationMutator, Program, SendBlockGenerator,
-    SendMessageGenerator, SingleTxGenerator, TxoGenerator, WitnessGenerator,
+    AddConnectionGenerator, AddTxToBlockGenerator, AddrRelayGenerator, AddrRelayV2Generator,
+    AdvanceTimeGenerator, BlockGenerator, BloomFilterAddGenerator, BloomFilterClearGenerator,
+    BloomFilterLoadGenerator, CombineMutator, CompactBlockGenerator, CompactFilterQueryGenerator,
+    GetAddrGenerator, GetDataGenerator, HeaderGenerator, InputMutator, InventoryGenerator,
+    LargeTxGenerator, LongChainGenerator, OneParentOneChildGenerator, OperationMutator, Program,
+    SendBlockGenerator, SendMessageGenerator, SingleTxGenerator, TxoGenerator, WitnessGenerator,
     cutting::CuttingMinimizer, instr_block::InstrBlockMinimizer, nopping::NoppingMinimizer,
 };
 
@@ -344,6 +344,10 @@ where
             (
                 50.0,
                 IrGenerator::new(CompactBlockGenerator::default(), rng.clone())
+            ),
+            (
+                50.0,
+                IrGenerator::new(AddConnectionGenerator::default(), rng.clone())
             )
         ];
 

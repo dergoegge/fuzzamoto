@@ -67,6 +67,8 @@ pub enum Operation {
     AdvanceTime,
     /// Set mock time
     SetTime,
+    /// Create a new connection to a node
+    AddConnection,
 
     /// Script building operations
     BuildRawScripts,
@@ -213,6 +215,7 @@ impl fmt::Display for Operation {
             Operation::AdvanceTime => write!(f, "AdvanceTime"),
             Operation::LoadTime(time) => write!(f, "LoadTime({})", time),
             Operation::SetTime => write!(f, "SetTime"),
+            Operation::AddConnection => write!(f, "AddConnection"),
             Operation::BuildRawScripts => write!(f, "BuildRawScripts"),
             Operation::BuildPayToWitnessScriptHash => write!(f, "BuildPayToWitnessScriptHash"),
             Operation::BuildPayToScriptHash => write!(f, "BuildPayToScriptHash"),
@@ -417,6 +420,7 @@ impl Operation {
             | Operation::LoadTime(_)
             | Operation::LoadSize(_)
             | Operation::SetTime
+            | Operation::AddConnection
             | Operation::BuildPayToWitnessScriptHash
             | Operation::BuildRawScripts
             | Operation::BuildPayToScriptHash
@@ -545,6 +549,7 @@ impl Operation {
             | Operation::LoadTime(_)
             | Operation::LoadSize(_)
             | Operation::SetTime
+            | Operation::AddConnection
             | Operation::BuildPayToWitnessScriptHash
             | Operation::BuildRawScripts
             | Operation::BuildPayToScriptHash
@@ -671,6 +676,7 @@ impl Operation {
             Operation::AdvanceTime => vec![Variable::Time],
             Operation::LoadTime(_) => vec![Variable::Time],
             Operation::SetTime => vec![],
+            Operation::AddConnection => vec![Variable::Connection],
             Operation::Nop { outputs, .. } => vec![Variable::Nop; *outputs],
             Operation::BuildPayToWitnessScriptHash => vec![Variable::Scripts],
             Operation::BuildPayToScriptHash => vec![Variable::Scripts],
@@ -774,6 +780,7 @@ impl Operation {
             }
             Operation::AdvanceTime => vec![Variable::Time, Variable::Duration],
             Operation::SetTime => vec![Variable::Time],
+            Operation::AddConnection => vec![Variable::Node, Variable::ConnectionType],
             Operation::BuildPayToWitnessScriptHash => {
                 vec![Variable::Bytes, Variable::ConstWitnessStack]
             }
@@ -954,6 +961,7 @@ impl Operation {
             | Operation::AdvanceTime
             | Operation::LoadTime(_)
             | Operation::SetTime
+            | Operation::AddConnection
             | Operation::BuildPayToWitnessScriptHash
             | Operation::BuildRawScripts
             | Operation::BuildPayToScriptHash

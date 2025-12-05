@@ -180,6 +180,8 @@ containing the correctly serialized transactions `v15` and `v30`.
 | `LoadSigHashFlags`| Loads signature hash flags. |
 | `LoadTxo` | Loads a transaction output from the context. |
 | `LoadHeader` | Loads a block header from the context. |
+| **Connection operations** | **Manage p2p connections.** |
+| `AddConnection` | Creates a new p2p connection to a node. |
 | **Time operations** | **Manipulate the mock time.** |
 | `AdvanceTime` | Advances time by a given duration. |
 | `SetTime` | Sets the mock time to a specific value. |
@@ -259,6 +261,7 @@ fuzzing campaign. The following generators are available:
 - `SendMessageGenerator`: Generates a new `SendRawMessage` instruction
 - `AdvanceTimeGenerator`: Generates new `AdvanceTime` and `SetTime`
   instructions
+- `AddConnectionGenerator`: Generates instructions to create new p2p connections
 - `CompactFilterQueryGenerator`: Generates new `SendGetCFilters`,
   `SendGetCFHeaders` and `SendGetCFCheckpt` instructions
 - `BlockGenerator`: Generates instructions to build a block

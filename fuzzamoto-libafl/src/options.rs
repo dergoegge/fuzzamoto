@@ -1,7 +1,19 @@
 use std::path::PathBuf;
 
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use libafl_bolts::core_affinity::{CoreId, Cores};
+
+/// Profiles that define which mutators/generators are enabled
+#[derive(Debug, Clone, Default, ValueEnum)]
+pub enum Profile {
+    /// All generators except slow/specialized ones (e.g. AddConnectionGenerator)
+    #[default]
+    Default,
+    /// All generators enabled
+    All,
+    /// Generators focused on connection testing
+    Connections,
+}
 
 #[readonly::make]
 #[derive(Parser, Debug)]
@@ -113,9 +125,16 @@ pub struct FuzzerOptions {
     #[arg(
         long,
         value_delimiter = ',',
-        help = "Comma-separated list of mutators/generators to enable (if not specified, all are enabled)"
+        help = "Comma-separated list of mutators/generators to enable (overrides profile)"
     )]
     pub mutators: Option<Vec<String>>,
+
+    #[arg(
+        long,
+        default_value = "default",
+        help = "Profile that defines which generators are enabled"
+    )]
+    pub profile: Profile,
 }
 
 impl FuzzerOptions {
@@ -160,14 +179,38 @@ impl FuzzerOptions {
 
     /// Returns the weight for a mutator/generator, or 0.0 if it's disabled
     pub fn mutator_weight(&self, name: &str, weight: f32) -> f32 {
-        match &self.mutators {
-            None => weight, // Default: all enabled with original weight
-            Some(list) => {
-                if list.iter().any(|m| m == name) {
-                    weight
-                } else {
+        if let Some(list) = &self.mutators {
+            return if list.iter().any(|m| m == name) {
+                weight
+            } else {
+                0.0
+            };
+        }
+
+        match self.profile {
+            Profile::Default => {
+                // Generators disabled in the default profile
+                const DISABLED: &[&str] = &["AddConnectionGenerator"];
+                if DISABLED.contains(&name) {
                     0.0
+                } else {
+                    weight
                 }
+            }
+            Profile::All => weight,
+            Profile::Connections => {
+                const ENABLED: &[&str] = &[
+                    "InputMutator",
+                    "OperationMutator",
+                    "AddConnectionGenerator",
+                    "AdvanceTimeGenerator",
+                    "HeaderGenerator",
+                    "BlockGenerator",
+                    "TxoGenerator",
+                    "SingleTxGenerator",
+                    "SendBlockGenerator",
+                ];
+                if ENABLED.contains(&name) { weight } else { 0.0 }
             }
         }
     }
