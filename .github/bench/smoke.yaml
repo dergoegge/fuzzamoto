@@ -1,0 +1,8 @@
+duration: 60
+runs: 1
+cores: "0"
+timeout_ms: 1000
+share_dir: /tmp/fuzzamoto_share
+corpus_seed: /tmp/bench-corpus
+fuzzer_path: target/release/fuzzamoto-libafl
+bench_snapshot_secs: 30

@@ -21,6 +21,7 @@ use libafl::{
     feedback_and, feedback_and_fast, feedback_or, feedback_or_fast,
     feedbacks::{ConstFeedback, CrashFeedback, HasObserverHandle, MaxMapFeedback, TimeFeedback},
     fuzzer::{Evaluator, Fuzzer, StdFuzzer},
+    mutators::scheduled::LoggerScheduledMutator,
     mutators::{ComposedByMutations, TuneableScheduledMutator},
     observers::{CanTrack, HitcountsMapObserver, StdMapObserver, StdOutObserver, TimeObserver},
     schedulers::{
@@ -123,8 +124,10 @@ where
 
         #[cfg(feature = "bench")]
         let bench_stats_stage = BenchStatsStage::new(
+            u32::try_from(self.client_description.core_id().0)
+                .expect("core_id should fit into u32"),
             trace_handle.clone(),
-            Duration::from_secs(30),
+            Duration::from_secs(self.options.bench_snapshot_secs()),
             self.options.bench_dir().join(format!(
                 "bench-cpu_{:03}.csv",
                 self.client_description.core_id().0
@@ -353,21 +356,24 @@ where
             )
         ];
 
-        let mutator = TuneableScheduledMutator::new(&mut state, mutations);
+        let tuneable_mutator = TuneableScheduledMutator::new(&mut state, mutations);
 
         let sum = weights.iter().sum::<f32>();
-        debug_assert_eq!(mutator.mutations().len(), weights.len());
+        debug_assert_eq!(tuneable_mutator.mutations().len(), weights.len());
 
-        mutator
+        tuneable_mutator
             .set_mutation_probabilities(
                 &mut state,
                 weights.iter().map(|w| w / sum).collect::<Vec<f32>>(),
             )
             .unwrap();
 
-        mutator
+        tuneable_mutator
             .set_iter_probabilities_pow(&mut state, vec![0.025f32, 0.1, 0.4, 0.3, 0.1, 0.05, 0.025])
             .unwrap();
+
+        // Wrap the scheduled mutator to record mutation chains on saved testcases.
+        let mutator = LoggerScheduledMutator::new(tuneable_mutator);
 
         let minimizing_crash = self.options.minimize_input.is_some();
 
