@@ -3,7 +3,10 @@ use std::net::Ipv6Addr;
 use bitcoin::p2p::ServiceFlags;
 use rand::{Rng, RngCore, seq::SliceRandom};
 
-use crate::{AddrNetwork, AddrRecord, Generator, GeneratorResult, Operation, ProgramBuilder};
+use crate::{
+    AddrNetwork, AddrRecord, Generator, GeneratorResult, Operation, PerTestcaseMetadata,
+    ProgramBuilder,
+};
 
 /// Generates address relay sequences (`SendAddr`).
 #[derive(Clone, Default)]
@@ -18,7 +21,12 @@ impl AddrRelayGenerator {
 }
 
 impl<R: RngCore> Generator<R> for AddrRelayGenerator {
-    fn generate(&self, builder: &mut ProgramBuilder, rng: &mut R) -> GeneratorResult {
+    fn generate(
+        &self,
+        builder: &mut ProgramBuilder,
+        rng: &mut R,
+        _meta: Option<&mut PerTestcaseMetadata>,
+    ) -> GeneratorResult {
         let v1_context: Vec<_> = self
             .addresses
             .iter()
@@ -61,7 +69,12 @@ impl AddrRelayV2Generator {
 }
 
 impl<R: RngCore> Generator<R> for AddrRelayV2Generator {
-    fn generate(&self, builder: &mut ProgramBuilder, rng: &mut R) -> GeneratorResult {
+    fn generate(
+        &self,
+        builder: &mut ProgramBuilder,
+        rng: &mut R,
+        _meta: Option<&mut PerTestcaseMetadata>,
+    ) -> GeneratorResult {
         let v2_context: Vec<_> = self
             .addresses
             .iter()

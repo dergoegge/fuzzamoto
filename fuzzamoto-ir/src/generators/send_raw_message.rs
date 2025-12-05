@@ -1,5 +1,5 @@
 use crate::{
-    Instruction, Operation, Variable,
+    Instruction, Operation, PerTestcaseMetadata, Variable,
     generators::{Generator, GeneratorError, GeneratorResult, ProgramBuilder},
 };
 use rand::{Rng, RngCore, seq::SliceRandom};
@@ -71,7 +71,12 @@ impl Default for SendMessageGenerator {
 }
 
 impl<R: RngCore> Generator<R> for SendMessageGenerator {
-    fn generate(&self, builder: &mut ProgramBuilder, rng: &mut R) -> GeneratorResult {
+    fn generate(
+        &self,
+        builder: &mut ProgramBuilder,
+        rng: &mut R,
+        _meta: Option<&mut PerTestcaseMetadata>,
+    ) -> GeneratorResult {
         // Use a connection from the parent program or load from context
         let conn_var_index = match builder.get_random_variable(rng, Variable::Connection) {
             Some(v) => v,

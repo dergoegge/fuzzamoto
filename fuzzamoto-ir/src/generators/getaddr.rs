@@ -1,7 +1,7 @@
 use rand::RngCore;
 
 use crate::{
-    Operation,
+    Operation, PerTestcaseMetadata,
     generators::{Generator, GeneratorError, GeneratorResult, ProgramBuilder},
 };
 
@@ -12,7 +12,12 @@ use crate::{
 pub struct GetAddrGenerator;
 
 impl<R: RngCore> Generator<R> for GetAddrGenerator {
-    fn generate(&self, builder: &mut ProgramBuilder, rng: &mut R) -> GeneratorResult {
+    fn generate(
+        &self,
+        builder: &mut ProgramBuilder,
+        rng: &mut R,
+        _meta: Option<&mut PerTestcaseMetadata>,
+    ) -> GeneratorResult {
         if builder.context().num_connections == 0 {
             return Err(GeneratorError::InvalidContext(builder.context().clone()));
         }

@@ -2,11 +2,11 @@ use std::{borrow::Cow, cell::RefCell, marker::PhantomData, process, rc::Rc, time
 
 use fuzzamoto_ir::{
     AddTxToBlockGenerator, AddrRelayGenerator, AddrRelayV2Generator, AdvanceTimeGenerator,
-    BlockGenerator, BloomFilterAddGenerator, BloomFilterClearGenerator, BloomFilterLoadGenerator,
-    CombineMutator, CompactBlockGenerator, CompactFilterQueryGenerator, GetAddrGenerator,
-    GetDataGenerator, HeaderGenerator, InputMutator, InventoryGenerator, LargeTxGenerator,
-    LongChainGenerator, OneParentOneChildGenerator, OperationMutator, Program, SendBlockGenerator,
-    SendMessageGenerator, SingleTxGenerator, TxoGenerator, WitnessGenerator,
+    BlockGenerator, BlockTxnGenerator, BloomFilterAddGenerator, BloomFilterClearGenerator,
+    BloomFilterLoadGenerator, CombineMutator, CompactBlockGenerator, CompactFilterQueryGenerator,
+    GetAddrGenerator, GetDataGenerator, HeaderGenerator, InputMutator, InventoryGenerator,
+    LargeTxGenerator, LongChainGenerator, OneParentOneChildGenerator, OperationMutator, Program,
+    SendBlockGenerator, SendMessageGenerator, SingleTxGenerator, TxoGenerator, WitnessGenerator,
     cutting::CuttingMinimizer, instr_block::InstrBlockMinimizer, nopping::NoppingMinimizer,
 };
 
@@ -22,7 +22,7 @@ use libafl::{
     feedbacks::{ConstFeedback, CrashFeedback, HasObserverHandle, MaxMapFeedback, TimeFeedback},
     fuzzer::{Evaluator, Fuzzer, StdFuzzer},
     mutators::{ComposedByMutations, TuneableScheduledMutator},
-    observers::{CanTrack, HitcountsMapObserver, StdMapObserver, TimeObserver},
+    observers::{CanTrack, HitcountsMapObserver, StdMapObserver, StdOutObserver, TimeObserver},
     schedulers::{
         IndexesLenTimeMinimizerScheduler, QueueScheduler, StdWeightedScheduler,
         powersched::PowerSchedule,
@@ -33,7 +33,7 @@ use libafl::{
 use libafl_bolts::{
     HasLen, Named, current_nanos,
     rands::{Rand, StdRand},
-    tuples::tuple_list,
+    tuples::{Handled, tuple_list},
 };
 use libafl_nyx::{executor::NyxExecutor, helper::NyxHelper, settings::NyxSettings};
 use rand::{SeedableRng, rngs::SmallRng};
@@ -45,7 +45,7 @@ use crate::{
     mutators::{IrGenerator, IrMutator, IrSpliceMutator, LibAflByteMutator},
     options::FuzzerOptions,
     schedulers::SupportedSchedulers,
-    stages::{IrMinimizerStage, VerifyTimeoutsStage},
+    stages::{IrMinimizerStage, ProbingStage, VerifyTimeoutsStage},
 };
 
 #[cfg(feature = "bench")]
@@ -115,6 +115,8 @@ where
         // Create an observation channel to keep track of the execution time
         let time_observer = TimeObserver::new("time");
 
+        let stdout_observer = StdOutObserver::new(Cow::Borrowed("hprintf_output")).unwrap();
+
         let map_feedback = MaxMapFeedback::new(&trace_observer);
 
         let trace_handle = map_feedback.observer_handle().clone();
@@ -130,6 +132,8 @@ where
         );
         #[cfg(not(feature = "bench"))]
         let bench_stats_stage = NopStage::new();
+
+        let stdout_observer_handle = stdout_observer.handle();
 
         // Feedback to rate the interestingness of an input
         let mut feedback = feedback_or!(
@@ -208,7 +212,7 @@ where
             )
         };
 
-        let observers = tuple_list!(trace_observer, time_observer); // stdout_observer);
+        let observers = tuple_list!(trace_observer, time_observer, stdout_observer);
 
         state.set_max_size(self.options.buffer_size);
 
@@ -233,7 +237,9 @@ where
             process::exit(0);
         }
 
-        let mut executor = NyxExecutor::builder().build(helper, observers);
+        let mut executor = NyxExecutor::builder()
+            .stdout(stdout_observer_handle.clone())
+            .build(helper, observers);
 
         let ir_context_dump = self.options.work_dir().join("dump/ir.context");
         let bytes = std::fs::read(ir_context_dump).expect("Could not read ir context file");
@@ -342,9 +348,13 @@ where
             ),
             (10.0, IrGenerator::new(GetAddrGenerator, rng.clone())),
             (
-                50.0,
+                200.0,
                 IrGenerator::new(CompactBlockGenerator::default(), rng.clone())
-            )
+            ),
+            (
+                200.0,
+                IrGenerator::new(BlockTxnGenerator::default(), rng.clone())
+            ),
         ];
 
         let mutator = TuneableScheduledMutator::new(&mut state, mutations);
@@ -367,6 +377,8 @@ where
 
         // Counter holding the number of successful minimizations in the last round
         let continue_minimizing = RefCell::new(1u64);
+
+        let probing = ProbingStage::new(&stdout_observer_handle);
 
         let mut stages = tuple_list!(
             ClosureStage::new(|_a: &mut _, _b: &mut _, _c: &mut _, _d: &mut _| {
@@ -403,6 +415,7 @@ where
                     ),
                 )
             ),
+            probing, // important: probing stage must be put at the beginning
             IfStage::new(
                 |_, _, _, _| Ok(self.options.minimize_input.is_none()),
                 tuple_list!(TuneableMutationalStage::new(&mut state, mutator))

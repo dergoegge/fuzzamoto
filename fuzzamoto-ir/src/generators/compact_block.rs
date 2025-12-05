@@ -1,6 +1,6 @@
 use super::{GeneratorError, GeneratorResult};
 use crate::{
-    Instruction, Operation, Variable,
+    Instruction, Operation, PerTestcaseMetadata, Variable,
     generators::{Generator, ProgramBuilder},
 };
 use rand::{Rng, RngCore};
@@ -10,7 +10,12 @@ use rand::{Rng, RngCore};
 pub struct CompactBlockGenerator;
 
 impl<R: RngCore> Generator<R> for CompactBlockGenerator {
-    fn generate(&self, builder: &mut ProgramBuilder, rng: &mut R) -> GeneratorResult {
+    fn generate(
+        &self,
+        builder: &mut ProgramBuilder,
+        rng: &mut R,
+        _meta: Option<&mut PerTestcaseMetadata>,
+    ) -> GeneratorResult {
         // choose a block upon which we build the compact block
         let Some(block) = builder.get_random_variable(rng, Variable::Block) else {
             return Err(GeneratorError::MissingVariables);

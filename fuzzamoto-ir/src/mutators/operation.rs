@@ -1,6 +1,7 @@
 use std::{time::Duration, u64};
 
 use super::{Mutator, MutatorResult};
+use crate::PerTestcaseMetadata;
 use crate::{
     AddrNetwork, AddrRecord, Operation, Program,
     generators::address::{
@@ -8,6 +9,7 @@ use crate::{
         random_payload_for_network, random_port, random_public_ipv4, random_services, random_time,
     },
 };
+
 use bitcoin::{NetworkKind, PrivateKey};
 
 use rand::{
@@ -28,7 +30,12 @@ pub struct OperationMutator<M> {
 }
 
 impl<R: RngCore, M: OperationByteMutator> Mutator<R> for OperationMutator<M> {
-    fn mutate(&mut self, program: &mut Program, rng: &mut R) -> MutatorResult {
+    fn mutate(
+        &mut self,
+        program: &mut Program,
+        rng: &mut R,
+        _meta: Option<&mut PerTestcaseMetadata>,
+    ) -> MutatorResult {
         let Some(candidate_instruction) = program
             .instructions
             .iter_mut()

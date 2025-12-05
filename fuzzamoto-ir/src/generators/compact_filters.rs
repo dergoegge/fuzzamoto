@@ -1,5 +1,5 @@
 use crate::{
-    Operation, Variable,
+    Operation, PerTestcaseMetadata, Variable,
     generators::{Generator, ProgramBuilder},
 };
 use rand::{Rng, RngCore, seq::SliceRandom};
@@ -12,7 +12,12 @@ use super::{GeneratorError, GeneratorResult};
 pub struct CompactFilterQueryGenerator;
 
 impl<R: RngCore> Generator<R> for CompactFilterQueryGenerator {
-    fn generate(&self, builder: &mut ProgramBuilder, rng: &mut R) -> GeneratorResult {
+    fn generate(
+        &self,
+        builder: &mut ProgramBuilder,
+        rng: &mut R,
+        _meta: Option<&mut PerTestcaseMetadata>,
+    ) -> GeneratorResult {
         let Some(header_var) = builder.get_random_variable(rng, Variable::Header) else {
             return Err(GeneratorError::MissingVariables);
         };

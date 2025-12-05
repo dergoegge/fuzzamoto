@@ -153,7 +153,7 @@ pub fn generate_ir(
             let variable_threshold = builder.variable_count();
 
             let generator = generators.choose(&mut rng).unwrap();
-            if let Err(_) = generator.generate(&mut builder, &mut rng) {
+            if let Err(_) = generator.generate(&mut builder, &mut rng, None) {
                 continue;
             }
 

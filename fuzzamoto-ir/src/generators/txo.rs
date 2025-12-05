@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use super::{Generator, GeneratorError, GeneratorResult};
-use crate::{Operation, ProgramBuilder};
+use crate::{Operation, PerTestcaseMetadata, ProgramBuilder};
 use rand::{Rng, RngCore};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -31,7 +31,12 @@ impl TxoGenerator {
 }
 
 impl<R: RngCore> Generator<R> for TxoGenerator {
-    fn generate(&self, builder: &mut ProgramBuilder, rng: &mut R) -> GeneratorResult {
+    fn generate(
+        &self,
+        builder: &mut ProgramBuilder,
+        rng: &mut R,
+        _meta: Option<&mut PerTestcaseMetadata>,
+    ) -> GeneratorResult {
         if self.available_txos.is_empty() {
             return Err(GeneratorError::MissingVariables);
         }

@@ -3,7 +3,7 @@ pub mod concat;
 pub mod input;
 pub mod operation;
 
-use crate::Program;
+use crate::{PerTestcaseMetadata, Program};
 pub use combine::*;
 pub use concat::*;
 pub use input::*;
@@ -19,7 +19,12 @@ pub enum MutatorError {
 pub type MutatorResult = Result<(), MutatorError>;
 
 pub trait Mutator<R: RngCore> {
-    fn mutate(&mut self, program: &mut Program, rng: &mut R) -> MutatorResult;
+    fn mutate(
+        &mut self,
+        program: &mut Program,
+        rng: &mut R,
+        meta: Option<&mut PerTestcaseMetadata>,
+    ) -> MutatorResult;
     fn name(&self) -> &'static str;
 }
 

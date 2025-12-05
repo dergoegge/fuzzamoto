@@ -4,6 +4,7 @@ pub mod compiler;
 pub mod errors;
 pub mod generators;
 pub mod instruction;
+pub mod metadata;
 pub mod minimizers;
 pub mod mutators;
 pub mod operation;
@@ -14,6 +15,7 @@ pub use bloom::*;
 pub use builder::*;
 pub use generators::*;
 pub use instruction::*;
+pub use metadata::*;
 pub use minimizers::*;
 pub use mutators::*;
 pub use operation::*;
@@ -308,3 +310,31 @@ impl fmt::Display for Program {
         Ok(())
     }
 }
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct GetBlockTxn {
+    /// Variable index of the connection
+    pub connection_index: usize,
+    /// Index of the instruction that triggered the node under test to send a getblocktxn
+    /// message
+    pub triggering_instruction_index: usize,
+    /// Variable index of the block whose transactions were requested
+    pub block_variable: usize,
+    /// Indices of the transaction indices variables requested
+    pub tx_indices_variables: Vec<usize>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub enum ProbeResult {
+    GetBlockTxn {
+        get_block_txn: GetBlockTxn,
+    },
+    Failure {
+        /// The command that failed to be decoded
+        command: String,
+        /// The reason for why it failed to decode
+        reason: String,
+    },
+}
+
+pub type ProbeResults = Vec<ProbeResult>;

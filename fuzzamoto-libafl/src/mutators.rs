@@ -4,6 +4,7 @@ use fuzzamoto_ir::Program;
 
 use libafl::{
     Error,
+    common::HasMetadata,
     corpus::{Corpus, CorpusId, NopCorpus},
     inputs::BytesInput,
     mutators::{HavocScheduledMutator, MutationResult, Mutator, havoc_mutations},
@@ -16,7 +17,7 @@ use libafl_bolts::{
 };
 use rand::RngCore;
 
-use crate::input::IrInput;
+use crate::{input::IrInput, stages::RuntimeMetadata};
 
 /// Instruction limit for mutated IR programs
 const MAX_INSTRUCTIONS: usize = 4096;
@@ -42,21 +43,51 @@ where
     }
 }
 
+pub fn runtime_metadata_mut<S>(state: &mut S) -> &mut RuntimeMetadata
+where
+    S: HasMetadata,
+{
+    let rt_data = state
+        .metadata_mut::<RuntimeMetadata>()
+        .expect("RuntimeMetadata should always exist at this point");
+    rt_data
+}
+
 impl<S, M, R> Mutator<IrInput, S> for IrMutator<M, R>
 where
-    S: HasRand,
+    S: HasRand + HasMetadata + HasCorpus<IrInput>,
     R: RngCore,
     M: fuzzamoto_ir::Mutator<R>,
 {
-    fn mutate(&mut self, _state: &mut S, input: &mut IrInput) -> Result<MutationResult, Error> {
-        Ok(match self.mutator.mutate(input.ir_mut(), &mut self.rng) {
-            Ok(_) => MutationResult::Mutated,
-            _ => MutationResult::Skipped,
-        })
+    fn mutate(&mut self, state: &mut S, input: &mut IrInput) -> Result<MutationResult, Error> {
+        let current_id = state.corpus().current().clone();
+
+        let rt_data = runtime_metadata_mut(state);
+        let is_first = rt_data.mutation_idx() == 0;
+        rt_data.increment_idx();
+
+        let tc_data = if is_first
+            && let Some(id) = current_id
+            && let Some(meta) = rt_data.metadata_mut(id)
+        {
+            Some(meta)
+        } else {
+            None
+        };
+
+        Ok(
+            match self.mutator.mutate(input.ir_mut(), &mut self.rng, tc_data) {
+                Ok(_) => MutationResult::Mutated,
+                _ => MutationResult::Skipped,
+            },
+        )
     }
 
     #[inline]
-    fn post_exec(&mut self, _state: &mut S, _new_corpus_id: Option<CorpusId>) -> Result<(), Error> {
+    fn post_exec(&mut self, state: &mut S, _new_corpus_id: Option<CorpusId>) -> Result<(), Error> {
+        let rt_data = runtime_metadata_mut(state);
+        rt_data.reset_idx();
+
         Ok(())
     }
 }
@@ -90,7 +121,7 @@ where
 
 impl<S, M, R> Mutator<IrInput, S> for IrSpliceMutator<M, R>
 where
-    S: HasRand + HasCorpus<IrInput>,
+    S: HasRand + HasCorpus<IrInput> + HasMetadata,
     R: RngCore,
     M: fuzzamoto_ir::Mutator<R> + fuzzamoto_ir::Splicer<R>,
 {
@@ -103,6 +134,9 @@ where
         {
             return Ok(MutationResult::Skipped);
         }
+
+        let rt_data = runtime_metadata_mut(state);
+        rt_data.increment_idx();
 
         let mut other_testcase = state.corpus().get_from_all(id)?.borrow_mut();
         if other_testcase.scheduled_count() == 0 {
@@ -131,7 +165,10 @@ where
     }
 
     #[inline]
-    fn post_exec(&mut self, _state: &mut S, _new_corpus_id: Option<CorpusId>) -> Result<(), Error> {
+    fn post_exec(&mut self, state: &mut S, _new_corpus_id: Option<CorpusId>) -> Result<(), Error> {
+        let rt_data = runtime_metadata_mut(state);
+        rt_data.reset_idx();
+
         Ok(())
     }
 }
@@ -165,12 +202,30 @@ where
 
 impl<S, G, R> Mutator<IrInput, S> for IrGenerator<G, R>
 where
-    S: HasRand,
+    S: HasRand + HasMetadata + HasCorpus<IrInput>,
     R: RngCore,
     G: fuzzamoto_ir::Generator<R>,
 {
-    fn mutate(&mut self, _state: &mut S, input: &mut IrInput) -> Result<MutationResult, Error> {
-        let Some(index) = self.generator.choose_index(input.ir(), &mut self.rng) else {
+    fn mutate(&mut self, state: &mut S, input: &mut IrInput) -> Result<MutationResult, Error> {
+        let current_id = state.corpus().current().clone();
+
+        let rt_data = runtime_metadata_mut(state);
+        let is_first = rt_data.mutation_idx() == 0;
+        rt_data.increment_idx();
+
+        let tc_data = if is_first
+            && let Some(id) = current_id
+            && let Some(meta) = rt_data.metadata_mut(id)
+        {
+            Some(meta)
+        } else {
+            None
+        };
+
+        let Some(index) = self
+            .generator
+            .choose_index(input.ir(), &mut self.rng, &tc_data)
+        else {
             return Ok(MutationResult::Skipped);
         };
 
@@ -184,7 +239,7 @@ where
 
         if self
             .generator
-            .generate(&mut builder, &mut self.rng)
+            .generate(&mut builder, &mut self.rng, tc_data)
             .is_err()
         {
             return Ok(MutationResult::Skipped);
@@ -217,7 +272,10 @@ where
     }
 
     #[inline]
-    fn post_exec(&mut self, _state: &mut S, _new_corpus_id: Option<CorpusId>) -> Result<(), Error> {
+    fn post_exec(&mut self, state: &mut S, _new_corpus_id: Option<CorpusId>) -> Result<(), Error> {
+        let rt_data = runtime_metadata_mut(state);
+        rt_data.reset_idx();
+
         Ok(())
     }
 }

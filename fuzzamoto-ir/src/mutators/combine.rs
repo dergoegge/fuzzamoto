@@ -1,5 +1,5 @@
 use super::{Mutator, MutatorError, MutatorResult, Splicer};
-use crate::{InstructionContext, Program, ProgramBuilder};
+use crate::{InstructionContext, PerTestcaseMetadata, Program, ProgramBuilder};
 use rand::RngCore;
 
 // `CombineMutator` takes two programs and combines them by splicing the second program into the
@@ -7,7 +7,12 @@ use rand::RngCore;
 pub struct CombineMutator;
 
 impl<R: RngCore> Mutator<R> for CombineMutator {
-    fn mutate(&mut self, _program: &mut Program, _rng: &mut R) -> MutatorResult {
+    fn mutate(
+        &mut self,
+        _program: &mut Program,
+        _rng: &mut R,
+        _meta: Option<&mut PerTestcaseMetadata>,
+    ) -> MutatorResult {
         Ok(())
     }
 

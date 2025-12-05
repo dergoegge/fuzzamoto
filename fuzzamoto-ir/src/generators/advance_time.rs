@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use crate::{
-    Instruction, Operation, Variable,
+    Instruction, Operation, PerTestcaseMetadata, Variable,
     generators::{Generator, GeneratorResult, ProgramBuilder},
 };
 use rand::{Rng, RngCore, seq::SliceRandom};
@@ -29,7 +29,12 @@ impl Default for AdvanceTimeGenerator {
 }
 
 impl<R: RngCore> Generator<R> for AdvanceTimeGenerator {
-    fn generate(&self, builder: &mut ProgramBuilder, rng: &mut R) -> GeneratorResult {
+    fn generate(
+        &self,
+        builder: &mut ProgramBuilder,
+        rng: &mut R,
+        _meta: Option<&mut PerTestcaseMetadata>,
+    ) -> GeneratorResult {
         // Find the most recent time variable or load the timestamp from the context
         let time_var = match builder.get_nearest_variable(Variable::Time) {
             Some(v) => v,

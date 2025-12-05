@@ -2,8 +2,8 @@ use bitcoin::hashes::Hash;
 use rand::{Rng, RngCore, seq::SliceRandom};
 
 use crate::{
-    CoinbaseTxGenerator, Generator, GeneratorResult, InstructionContext, Operation, ProgramBuilder,
-    Variable,
+    CoinbaseTxGenerator, Generator, GeneratorResult, InstructionContext, Operation,
+    PerTestcaseMetadata, ProgramBuilder, Variable,
 };
 
 use super::GeneratorError;
@@ -14,7 +14,12 @@ pub struct BlockGenerator {
 }
 
 impl<R: RngCore> Generator<R> for BlockGenerator {
-    fn generate(&self, builder: &mut ProgramBuilder, rng: &mut R) -> GeneratorResult {
+    fn generate(
+        &self,
+        builder: &mut ProgramBuilder,
+        rng: &mut R,
+        meta: Option<&mut PerTestcaseMetadata>,
+    ) -> GeneratorResult {
         let header_var = if rng.gen_bool(0.5) {
             builder.get_random_variable(rng, Variable::Header)
         } else {
@@ -45,7 +50,7 @@ impl<R: RngCore> Generator<R> for BlockGenerator {
             if let Some(coinbase_var) = builder.get_random_variable(rng, Variable::CoinbaseTx) {
                 coinbase_var
             } else {
-                self.coinbase_generator.generate(builder, rng)?;
+                self.coinbase_generator.generate(builder, rng, meta)?;
                 builder
                     .get_random_variable(rng, Variable::CoinbaseTx)
                     .unwrap()
@@ -124,7 +129,12 @@ impl HeaderGenerator {
 }
 
 impl<R: RngCore> Generator<R> for HeaderGenerator {
-    fn generate(&self, builder: &mut ProgramBuilder, rng: &mut R) -> GeneratorResult {
+    fn generate(
+        &self,
+        builder: &mut ProgramBuilder,
+        rng: &mut R,
+        _meta: Option<&mut PerTestcaseMetadata>,
+    ) -> GeneratorResult {
         let header = self.headers.choose(rng).unwrap().clone();
 
         builder.force_append(
@@ -151,7 +161,12 @@ impl<R: RngCore> Generator<R> for HeaderGenerator {
 pub struct SendBlockGenerator;
 
 impl<R: RngCore> Generator<R> for SendBlockGenerator {
-    fn generate(&self, builder: &mut ProgramBuilder, rng: &mut R) -> GeneratorResult {
+    fn generate(
+        &self,
+        builder: &mut ProgramBuilder,
+        rng: &mut R,
+        _meta: Option<&mut PerTestcaseMetadata>,
+    ) -> GeneratorResult {
         let block_var = builder
             .get_random_variable(rng, Variable::Block)
             .ok_or(GeneratorError::MissingVariables)?;
@@ -178,7 +193,12 @@ impl<R: RngCore> Generator<R> for SendBlockGenerator {
 pub struct AddTxToBlockGenerator;
 
 impl<R: RngCore> Generator<R> for AddTxToBlockGenerator {
-    fn generate(&self, builder: &mut ProgramBuilder, rng: &mut R) -> GeneratorResult {
+    fn generate(
+        &self,
+        builder: &mut ProgramBuilder,
+        rng: &mut R,
+        _meta: Option<&mut PerTestcaseMetadata>,
+    ) -> GeneratorResult {
         let block_var = builder
             .get_nearest_variable(Variable::MutBlockTransactions)
             .ok_or(GeneratorError::MissingVariables)?;

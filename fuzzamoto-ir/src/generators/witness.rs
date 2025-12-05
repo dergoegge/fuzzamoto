@@ -1,5 +1,5 @@
 use crate::{
-    InstructionContext, Operation, Variable,
+    InstructionContext, Operation, PerTestcaseMetadata, Variable,
     generators::{Generator, ProgramBuilder},
 };
 use rand::{Rng, RngCore, seq::SliceRandom};
@@ -16,7 +16,12 @@ impl WitnessGenerator {
 }
 
 impl<R: RngCore> Generator<R> for WitnessGenerator {
-    fn generate(&self, builder: &mut ProgramBuilder, rng: &mut R) -> GeneratorResult {
+    fn generate(
+        &self,
+        builder: &mut ProgramBuilder,
+        rng: &mut R,
+        _meta: Option<&mut PerTestcaseMetadata>,
+    ) -> GeneratorResult {
         let Some(witness_var) = builder.get_nearest_variable(Variable::MutWitnessStack) else {
             return Err(GeneratorError::MissingVariables);
         };

@@ -1,5 +1,5 @@
 use crate::{
-    IndexedVariable, Operation,
+    IndexedVariable, Operation, PerTestcaseMetadata,
     generators::{Generator, ProgramBuilder},
 };
 use bitcoin::opcodes::OP_TRUE;
@@ -178,7 +178,12 @@ fn build_tx(
 pub struct SingleTxGenerator;
 
 impl<R: RngCore> Generator<R> for SingleTxGenerator {
-    fn generate(&self, builder: &mut ProgramBuilder, rng: &mut R) -> GeneratorResult {
+    fn generate(
+        &self,
+        builder: &mut ProgramBuilder,
+        rng: &mut R,
+        _meta: Option<&mut PerTestcaseMetadata>,
+    ) -> GeneratorResult {
         let funding_txos = builder.get_random_utxos(rng);
         if funding_txos.is_empty() {
             return Err(GeneratorError::MissingVariables);
@@ -237,7 +242,12 @@ impl Default for SingleTxGenerator {
 pub struct OneParentOneChildGenerator;
 
 impl<R: RngCore> Generator<R> for OneParentOneChildGenerator {
-    fn generate(&self, builder: &mut ProgramBuilder, rng: &mut R) -> GeneratorResult {
+    fn generate(
+        &self,
+        builder: &mut ProgramBuilder,
+        rng: &mut R,
+        _meta: Option<&mut PerTestcaseMetadata>,
+    ) -> GeneratorResult {
         let funding_txos = builder.get_random_utxos(rng);
         if funding_txos.is_empty() {
             return Err(GeneratorError::MissingVariables);
@@ -303,7 +313,12 @@ impl Default for OneParentOneChildGenerator {
 pub struct LongChainGenerator;
 
 impl<R: RngCore> Generator<R> for LongChainGenerator {
-    fn generate(&self, builder: &mut ProgramBuilder, rng: &mut R) -> GeneratorResult {
+    fn generate(
+        &self,
+        builder: &mut ProgramBuilder,
+        rng: &mut R,
+        _meta: Option<&mut PerTestcaseMetadata>,
+    ) -> GeneratorResult {
         let mut funding_txos = builder.get_random_utxos(rng);
         if funding_txos.is_empty() {
             return Err(GeneratorError::MissingVariables);
@@ -367,7 +382,12 @@ impl Default for LongChainGenerator {
 pub struct LargeTxGenerator;
 
 impl<R: RngCore> Generator<R> for LargeTxGenerator {
-    fn generate(&self, builder: &mut ProgramBuilder, rng: &mut R) -> GeneratorResult {
+    fn generate(
+        &self,
+        builder: &mut ProgramBuilder,
+        rng: &mut R,
+        _meta: Option<&mut PerTestcaseMetadata>,
+    ) -> GeneratorResult {
         let funding_txos = builder.get_random_utxos(rng);
         if funding_txos.is_empty() {
             return Err(GeneratorError::MissingVariables);
@@ -422,7 +442,12 @@ impl Default for LargeTxGenerator {
 pub struct CoinbaseTxGenerator;
 
 impl<R: RngCore> Generator<R> for CoinbaseTxGenerator {
-    fn generate(&self, builder: &mut ProgramBuilder, rng: &mut R) -> GeneratorResult {
+    fn generate(
+        &self,
+        builder: &mut ProgramBuilder,
+        rng: &mut R,
+        _meta: Option<&mut PerTestcaseMetadata>,
+    ) -> GeneratorResult {
         let tx_version_var =
             builder.force_append_expect_output(vec![], Operation::LoadTxVersion(1));
 

@@ -1,7 +1,7 @@
 use bitcoin::bip152::HeaderAndShortIds;
 use bitcoin::{
-    Amount, CompactTarget, EcdsaSighashType, NetworkKind, OutPoint, PrivateKey, Script, ScriptBuf,
-    Sequence, Transaction, TxIn, TxMerkleNode, TxOut, Txid, WitnessMerkleNode, Wtxid,
+    Amount, Block, CompactTarget, EcdsaSighashType, NetworkKind, OutPoint, PrivateKey, Script,
+    ScriptBuf, Sequence, Transaction, TxIn, TxMerkleNode, TxOut, Txid, WitnessMerkleNode, Wtxid,
     absolute::LockTime,
     consensus::Encodable,
     ecdsa,
@@ -21,6 +21,7 @@ use bitcoin::{
     sighash::SighashCache,
     transaction,
 };
+use std::collections::HashMap;
 use std::{any::Any, convert::TryInto, time::Duration};
 
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
@@ -40,12 +41,6 @@ pub struct Compiler {
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
-pub enum ProbeAction {
-    EnableMsgRecording,
-    DisableMsgRecording,
-}
-
-#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 pub enum CompiledAction {
     /// Create a new connection
     Connect(usize, String),
@@ -53,12 +48,55 @@ pub enum CompiledAction {
     SendRawMessage(usize, String, Vec<u8>),
     /// Set mock time for all nodes in the test
     SetTime(u64),
-    Probe(ProbeAction),
+    Probe,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 pub struct CompiledProgram {
     pub actions: Vec<CompiledAction>,
+    pub metadata: CompiledMetadata,
+}
+
+pub type VariableIndex = usize;
+
+pub type InstructionIndex = usize;
+
+pub type ConnectionId = usize;
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+pub struct CompiledMetadata {
+    // Map from blockhash to (block variable index, list of transaction variable indices)
+    block_tx_var_map: HashMap<bitcoin::BlockHash, (usize, Vec<usize>)>,
+    // Map from connection ids to connection variable indices.
+    connection_map: HashMap<ConnectionId, VariableIndex>,
+    // List of instruction indices that correspond to actions in the compiled program (does not includ probe operation)
+    action_indices: Vec<InstructionIndex>,
+}
+
+impl CompiledMetadata {
+    pub fn new() -> Self {
+        Self {
+            block_tx_var_map: HashMap::new(),
+            connection_map: HashMap::new(),
+            action_indices: Vec::new(),
+        }
+    }
+
+    // Get the block variable index and list of transaction variable indices for a given block hash
+    pub fn block_variables(&self, block_hash: &bitcoin::BlockHash) -> Option<(usize, &[usize])> {
+        self.block_tx_var_map
+            .get(block_hash)
+            .map(|(block_var, tx_vars)| (*block_var, tx_vars.as_slice()))
+    }
+
+    // Get the list of instruction indices that correspond to actions in the compiled program
+    pub fn instruction_indices(&self) -> &[InstructionIndex] {
+        &self.action_indices
+    }
+
+    pub fn connection_map(&self) -> &HashMap<ConnectionId, VariableIndex> {
+        &self.connection_map
+    }
 }
 
 #[derive(Debug)]
@@ -158,6 +196,12 @@ struct CoinbaseTx {
 }
 
 #[derive(Clone, Debug)]
+struct BlockTransactions {
+    txs: Vec<Tx>,
+    var_indices: Vec<usize>,
+}
+
+#[derive(Clone, Debug)]
 struct AddrList {
     entries: Vec<(u32, Address)>,
 }
@@ -171,7 +215,18 @@ struct Nop;
 
 impl Compiler {
     pub fn compile(&mut self, ir: &Program) -> CompilerResult {
-        for instruction in &ir.instructions {
+        let is_probing = ir
+            .instructions
+            .iter()
+            .any(|inst| matches!(inst.operation, Operation::Probe));
+
+        for (instruction_index, instruction) in ir.instructions.iter().enumerate() {
+            let actions_before = self
+                .output
+                .actions
+                .iter()
+                .filter(|action| !matches!(action, CompiledAction::Probe))
+                .count();
             match instruction.operation.clone() {
                 Operation::Nop { .. }
                 | Operation::LoadNode(..)
@@ -283,6 +338,12 @@ impl Compiler {
                     self.handle_time_operations(&instruction)?;
                 }
 
+                Operation::BeginBuildBlockTxn
+                | Operation::EndBuildBlockTxn
+                | Operation::AddTxToBlockTxn => {
+                    self.handle_bip152_blocktxn_operations(&instruction)?;
+                }
+
                 Operation::SendRawMessage
                 | Operation::SendTxNoWit
                 | Operation::SendTx
@@ -300,12 +361,34 @@ impl Compiler {
                 | Operation::SendFilterLoad
                 | Operation::SendFilterAdd
                 | Operation::SendFilterClear
-                | Operation::SendCompactBlock => {
+                | Operation::SendCompactBlock
+                | Operation::SendBlockTxn => {
                     self.handle_message_sending_operations(&instruction)?;
+                }
+
+                Operation::Probe => {
+                    self.handle_probe_operations(&instruction)?;
+                }
+            }
+
+            // Record the instruction index for each action emitted by this instruction
+            let actions_after = self
+                .output
+                .actions
+                .iter()
+                .filter(|action| !matches!(action, CompiledAction::Probe))
+                .count();
+            for _ in actions_before..actions_after {
+                if is_probing {
+                    self.output
+                        .metadata
+                        .action_indices
+                        .push(instruction_index - 1);
+                } else {
+                    self.output.metadata.action_indices.push(instruction_index);
                 }
             }
         }
-
         Ok(self.output.clone()) // TODO: do not clone
     }
 
@@ -316,8 +399,21 @@ impl Compiler {
             variables: Vec::with_capacity(4096),
             output: CompiledProgram {
                 actions: Vec::with_capacity(4096),
+                metadata: CompiledMetadata::new(),
             },
         }
+    }
+
+    fn update_connection_map(
+        &mut self,
+        connection_id: ConnectionId,
+        connection_var_index: VariableIndex,
+    ) {
+        self.output
+            .metadata
+            .connection_map
+            .entry(connection_id)
+            .or_insert(connection_var_index);
     }
 
     fn handle_load_operation<T: 'static>(&mut self, value: T) {
@@ -979,6 +1075,13 @@ impl Compiler {
         instruction: &Instruction,
     ) -> Result<(), CompilerError> {
         match &instruction.operation {
+            Operation::SendBlockTxn => {
+                let connection_var = self.get_input::<usize>(&instruction.inputs, 0)?;
+                let blocktxn = self
+                    .get_input::<bitcoin::bip152::BlockTransactions>(&instruction.inputs, 1)?
+                    .clone();
+                self.emit_send_message(*connection_var, "blocktxn", &blocktxn);
+            }
             Operation::SendRawMessage => {
                 let connection_var = self.get_input::<usize>(&instruction.inputs, 0)?;
                 let message_type_var = self.get_input::<[char; 12]>(&instruction.inputs, 1)?;
@@ -1031,6 +1134,7 @@ impl Compiler {
             }
             Operation::SendAddrV2 => {
                 let connection_var = self.get_input::<usize>(&instruction.inputs, 0)?;
+
                 let addr_var = self.get_input::<Vec<AddrV2Message>>(&instruction.inputs, 1)?;
                 let payload = bitcoin::consensus::encode::serialize(addr_var);
                 self.emit_send_raw_message(*connection_var, "addrv2", payload);
@@ -1153,6 +1257,38 @@ impl Compiler {
         Ok(())
     }
 
+    fn handle_bip152_blocktxn_operations(
+        &mut self,
+        instruction: &Instruction,
+    ) -> Result<(), CompilerError> {
+        match &instruction.operation {
+            Operation::BeginBuildBlockTxn => {
+                let block = self.get_input::<Block>(&instruction.inputs, 0)?;
+                let block_txn = bitcoin::bip152::BlockTransactions {
+                    block_hash: block.block_hash(),
+                    transactions: Vec::new(),
+                };
+                self.append_variable(block_txn);
+            }
+            Operation::AddTxToBlockTxn => {
+                let tx = self.get_input::<Tx>(&instruction.inputs, 1)?.clone();
+                let block_txn = self
+                    .get_input_mut::<bitcoin::bip152::BlockTransactions>(&instruction.inputs, 0)?;
+                block_txn.transactions.push(tx.tx.clone());
+            }
+            Operation::EndBuildBlockTxn => {
+                let block_txn = self
+                    .get_input::<bitcoin::bip152::BlockTransactions>(&instruction.inputs, 0)?
+                    .clone();
+                self.append_variable(block_txn);
+            }
+            _ => unreachable!(
+                "Non-message-sending operation passed to handle_message_sending_operations"
+            ),
+        }
+        Ok(())
+    }
+
     fn handle_load_operations(&mut self, instruction: &Instruction) -> Result<(), CompilerError> {
         match &instruction.operation {
             Operation::Nop {
@@ -1167,7 +1303,11 @@ impl Compiler {
                 }
             }
             Operation::LoadNode(index) => self.handle_load_operation(*index),
-            Operation::LoadConnection(index) => self.handle_load_operation(*index),
+            Operation::LoadConnection(id) => {
+                let conn_index = self.variables.len();
+                self.update_connection_map(*id, conn_index);
+                self.handle_load_operation(*id);
+            }
             Operation::LoadConnectionType(connection_type) => {
                 self.handle_load_operation(connection_type.clone())
             }
@@ -1265,16 +1405,22 @@ impl Compiler {
     ) -> Result<(), CompilerError> {
         match &instruction.operation {
             Operation::BeginBlockTransactions => {
-                self.append_variable(Vec::<Tx>::new());
+                self.append_variable(BlockTransactions {
+                    txs: Vec::new(),
+                    var_indices: Vec::new(),
+                });
             }
             Operation::AddTx => {
                 let tx_var = self.get_input::<Tx>(&instruction.inputs, 1)?.clone();
+                let tx_var_index = instruction.inputs[1];
                 let block_transactions_var =
-                    self.get_input_mut::<Vec<Tx>>(&instruction.inputs, 0)?;
-                block_transactions_var.push(tx_var);
+                    self.get_input_mut::<BlockTransactions>(&instruction.inputs, 0)?;
+                block_transactions_var.txs.push(tx_var);
+                block_transactions_var.var_indices.push(tx_var_index);
             }
             Operation::EndBlockTransactions => {
-                let block_transactions_var = self.get_input::<Vec<Tx>>(&instruction.inputs, 0)?;
+                let block_transactions_var =
+                    self.get_input::<BlockTransactions>(&instruction.inputs, 0)?;
                 self.append_variable(block_transactions_var.clone());
             }
             Operation::BuildBlock => {
@@ -1300,6 +1446,17 @@ impl Compiler {
             }
             _ => unreachable!("Non-time operation passed to handle_time_operations"),
         }
+        Ok(())
+    }
+
+    fn handle_probe_operations(&mut self, instruction: &Instruction) -> Result<(), CompilerError> {
+        match &instruction.operation {
+            Operation::Probe => {
+                self.emit_enable_logging_message();
+            }
+            _ => unreachable!("Non probing operation passed to handle_probe_operations"),
+        }
+
         Ok(())
     }
 
@@ -1347,6 +1504,10 @@ impl Compiler {
         self.variables.push(Box::new(value));
     }
 
+    fn emit_enable_logging_message(&mut self) {
+        self.output.actions.push(CompiledAction::Probe);
+    }
+
     fn emit_send_raw_message(&mut self, connection_var: usize, message_type: &str, bytes: Vec<u8>) {
         self.output.actions.push(CompiledAction::SendRawMessage(
             connection_var,
@@ -1375,7 +1536,9 @@ impl Compiler {
         let header_var = self.get_input::<Header>(&instruction.inputs, 1)?.clone();
         let time_var = self.get_input::<u64>(&instruction.inputs, 2)?.clone();
         let block_version_var = self.get_input::<i32>(&instruction.inputs, 3)?.clone();
-        let block_transactions_var = self.get_input::<Vec<Tx>>(&instruction.inputs, 4)?.clone();
+        let block_transactions_var = self
+            .get_input::<BlockTransactions>(&instruction.inputs, 4)?
+            .clone();
 
         coinbase_tx_var.tx.tx.input[0].script_sig = ScriptBuf::builder()
             .push_int((header_var.height + 1) as i64)
@@ -1384,7 +1547,7 @@ impl Compiler {
             .into();
 
         let mut txdata = vec![coinbase_tx_var.tx.tx.clone()];
-        txdata.extend(block_transactions_var.iter().map(|tx| tx.tx.clone()));
+        txdata.extend(block_transactions_var.txs.iter().map(|tx| tx.tx.clone()));
 
         let mut block = bitcoin::Block {
             header: bitcoin::block::Header {
@@ -1448,7 +1611,15 @@ impl Compiler {
             version: block.header.version.to_consensus(),
         });
 
+        // Record the block variable index and transaction variable indices in metadata
+        let block_hash = block.header.block_hash();
+        let block_var_index = self.variables.len();
         self.append_variable(block);
+        self.output
+            .metadata
+            .block_tx_var_map
+            .entry(block_hash)
+            .or_insert((block_var_index, block_transactions_var.var_indices.clone()));
 
         self.append_variable(coinbase_tx_var.tx);
 

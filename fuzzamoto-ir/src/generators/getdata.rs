@@ -1,6 +1,9 @@
 use rand::{RngCore, seq::SliceRandom};
 
-use crate::{Generator, GeneratorResult, InstructionContext, Operation, ProgramBuilder, Variable};
+use crate::{
+    Generator, GeneratorResult, InstructionContext, Operation, PerTestcaseMetadata, ProgramBuilder,
+    Variable,
+};
 
 use super::GeneratorError;
 
@@ -9,7 +12,12 @@ use super::GeneratorError;
 pub struct GetDataGenerator;
 
 impl<R: RngCore> Generator<R> for GetDataGenerator {
-    fn generate(&self, builder: &mut ProgramBuilder, rng: &mut R) -> GeneratorResult {
+    fn generate(
+        &self,
+        builder: &mut ProgramBuilder,
+        rng: &mut R,
+        _meta: Option<&mut PerTestcaseMetadata>,
+    ) -> GeneratorResult {
         let inventory_var = builder
             .get_random_variable(rng, Variable::ConstInventory)
             .ok_or(GeneratorError::MissingVariables)?;
@@ -35,7 +43,12 @@ impl<R: RngCore> Generator<R> for GetDataGenerator {
 pub struct InventoryGenerator;
 
 impl<R: RngCore> Generator<R> for InventoryGenerator {
-    fn generate(&self, builder: &mut ProgramBuilder, rng: &mut R) -> GeneratorResult {
+    fn generate(
+        &self,
+        builder: &mut ProgramBuilder,
+        rng: &mut R,
+        _meta: Option<&mut PerTestcaseMetadata>,
+    ) -> GeneratorResult {
         let Some(mut_inventory_var) = builder.get_nearest_variable(Variable::MutInventory) else {
             return Err(GeneratorError::MissingVariables);
         };

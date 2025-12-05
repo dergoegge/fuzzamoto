@@ -60,4 +60,7 @@ pub enum Variable {
 
     CoinbaseInput,
     CoinbaseTx,
+
+    MutBlockTxn,
+    ConstBlockTxn,
 }
