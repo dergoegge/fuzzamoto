@@ -29,6 +29,7 @@ pub struct BenchStatsStage<T, O> {
     initialised: Instant,
     last_update: Instant,
     update_interval: Duration,
+    store_bitmaps: bool,
 
     last_execs: u64,
     last_corpus_count: usize,
@@ -51,6 +52,7 @@ impl<T, O> BenchStatsStage<T, O> {
         trace_handle: Handle<T>,
         update_interval: Duration,
         stats_file_path: PathBuf,
+        store_bitmaps: bool,
     ) -> Self {
         let coverage_file_path = stats_file_path.with_extension("bin");
         let mutations_file_path = stats_file_path.with_extension("mutations.jsonl");
@@ -61,6 +63,7 @@ impl<T, O> BenchStatsStage<T, O> {
             initialised: Instant::now(),
             last_update,
             update_interval,
+            store_bitmaps,
             last_execs: 0,
             last_corpus_count: 0,
             last_solution_count: 0,
@@ -185,13 +188,14 @@ where
         )
         .map_err(|e| libafl::Error::unknown(format!("Failed to write CSV data: {}", e)))?;
 
-        log::debug!(
-            "bench_stats: cpu={} dumping coverage map len={}",
-            self.cpu_id,
-            self.union_map.len()
-        );
-
-        dump_coverage_map(&self.union_map, &self.coverage_file_path)?;
+        if self.store_bitmaps {
+            log::debug!(
+                "bench_stats: cpu={} dumping coverage map len={}",
+                self.cpu_id,
+                self.union_map.len()
+            );
+            dump_coverage_map(&self.union_map, &self.coverage_file_path)?;
+        }
         self.record_new_mutations(state)?;
 
         Ok(())

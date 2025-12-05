@@ -16,8 +16,6 @@ use serde::{Deserialize, Serialize};
 use crate::error::{CliError, Result};
 
 const DEFAULT_FUZZER_PATH: &str = "target/release/fuzzamoto-libafl";
-// TODO: consider making bench snapshot configurable instead of hardcoding 30s.
-const BENCH_SNAPSHOT_SECS: u64 = 30;
 
 pub struct BenchmarkCommand;
 
@@ -95,10 +93,22 @@ struct BenchmarkConfig {
     corpus_seed: PathBuf,
     #[serde(default)]
     fuzzer_path: Option<PathBuf>,
+    #[serde(default = "default_bench_snapshot_secs")]
+    bench_snapshot_secs: u64,
+    #[serde(default = "default_bench_store_bitmaps")]
+    bench_store_bitmaps: bool,
 }
 
 fn default_timeout_ms() -> u64 {
     1_000
+}
+
+fn default_bench_snapshot_secs() -> u64 {
+    30
+}
+
+fn default_bench_store_bitmaps() -> bool {
+    true
 }
 
 fn run_suite(suite: &PathBuf, output: &PathBuf, write_html: bool) -> Result<()> {
@@ -169,6 +179,10 @@ fn run_single(
         .arg(&config.cores)
         .arg("--timeout")
         .arg(config.timeout_ms.to_string())
+        .arg("--bench-snapshot-secs")
+        .arg(config.bench_snapshot_secs.to_string())
+        .arg("--bench-store-bitmaps")
+        .arg(config.bench_store_bitmaps.to_string())
         .stdout(Stdio::from(log_file))
         .stderr(Stdio::from(log_clone))
         .spawn()
@@ -212,12 +226,11 @@ fn run_single(
 /// Aggregate all run_* outputs into suite-level stats and optional HTML.
 fn aggregate_suite(root: &Path, write_html: bool) -> Result<()> {
     let suite_samples = load_suite_samples(root)?;
-
-    // Load per-run summary.json files for suite-level relcov/histogram.
     let mut suite_hist = EdgeHistogram::default();
     let mut suite_runs_with_hist = 0usize;
-    let mut suite_relcov: Vec<(String, f64, usize)> = Vec::new(); // (cpu, sum, count)
+    let mut relcov_accum: HashMap<String, (f64, usize)> = HashMap::new();
 
+    // Single pass: collect per-run summaries alongside timeseries parsing.
     for entry in fs::read_dir(root)? {
         let entry = entry?;
         let path = entry.path();
@@ -232,27 +245,23 @@ fn aggregate_suite(root: &Path, write_html: bool) -> Result<()> {
         if !summary_path.exists() {
             continue;
         }
-        if let Ok(bytes) = fs::read(&summary_path) {
-            if let Ok(summary) = serde_json::from_slice::<BenchSummary>(&bytes) {
-                if let Some(hist) = summary.edge_histogram {
-                    suite_hist.hit_1 += hist.hit_1;
-                    suite_hist.hit_2_3 += hist.hit_2_3;
-                    suite_hist.hit_ge_4 += hist.hit_ge_4;
-                    suite_runs_with_hist += 1;
-                }
-                if let Some(relcov) = summary.per_cpu_relcov {
-                    for entry in relcov {
-                        if let Some((_, sum, cnt)) = suite_relcov
-                            .iter_mut()
-                            .find(|(cpu, _, _)| cpu == &entry.cpu)
-                        {
-                            *sum += entry.relcov_pct;
-                            *cnt += 1;
-                        } else {
-                            suite_relcov.push((entry.cpu, entry.relcov_pct, 1));
-                        }
-                    }
-                }
+        let Ok(bytes) = fs::read(&summary_path) else {
+            continue;
+        };
+        let Ok(summary) = serde_json::from_slice::<BenchSummary>(&bytes) else {
+            continue;
+        };
+        if let Some(hist) = summary.edge_histogram {
+            suite_hist.hit_1 += hist.hit_1;
+            suite_hist.hit_2_3 += hist.hit_2_3;
+            suite_hist.hit_ge_4 += hist.hit_ge_4;
+            suite_runs_with_hist += 1;
+        }
+        if let Some(relcov) = summary.per_cpu_relcov {
+            for entry in relcov {
+                let acc = relcov_accum.entry(entry.cpu).or_insert((0.0, 0));
+                acc.0 += entry.relcov_pct;
+                acc.1 += 1;
             }
         }
     }
@@ -262,37 +271,28 @@ fn aggregate_suite(root: &Path, write_html: bool) -> Result<()> {
     }
 
     let suite_series = bucket_mean_series(&suite_samples);
-    let suite_json = serde_json::to_string(&suite_series)?;
-    let hist_json = if suite_runs_with_hist > 0 {
-        Some(serde_json::to_string(&suite_hist).unwrap_or_default())
-    } else {
+    let hist_opt = (suite_runs_with_hist > 0).then_some(suite_hist);
+    let relcov_opt = if relcov_accum.is_empty() {
         None
-    };
-    let relcov_json = if !suite_relcov.is_empty() {
-        // average relcov per CPU across runs
-        let averaged: Vec<RelcovEntry> = suite_relcov
-            .into_iter()
-            .map(|(cpu, sum, cnt)| RelcovEntry {
-                cpu,
-                edges: 0,
-                relcov_pct: sum / cnt as f64,
-            })
-            .collect();
-        Some(serde_json::to_string(&averaged).unwrap_or_default())
     } else {
-        None
+        Some(
+            relcov_accum
+                .into_iter()
+                .map(|(cpu, (sum, cnt))| RelcovEntry {
+                    cpu,
+                    edges: 0,
+                    relcov_pct: sum / cnt as f64,
+                })
+                .collect::<Vec<_>>(),
+        )
     };
 
     let suite_summary = SuiteSummary {
         runs: suite_runs_with_hist.max(1),
         coverage_mean: suite_series.coverage_mean.last().copied(),
         corpus_mean: suite_series.corpus_mean.last().copied(),
-        edge_histogram: hist_json
-            .as_deref()
-            .and_then(|s| serde_json::from_str::<EdgeHistogram>(s).ok()),
-        per_cpu_relcov: relcov_json
-            .as_deref()
-            .and_then(|s| serde_json::from_str::<Vec<RelcovEntry>>(s).ok()),
+        edge_histogram: hist_opt.clone(),
+        per_cpu_relcov: relcov_opt.clone(),
     };
     fs::write(
         root.join("suite_summary.json"),
@@ -300,23 +300,18 @@ fn aggregate_suite(root: &Path, write_html: bool) -> Result<()> {
     )?;
 
     if write_html {
-        write_suite_report_html(
-            root,
-            &suite_json,
-            hist_json.as_deref(),
-            relcov_json.as_deref(),
-        )?;
+        write_suite_report_html(root, &suite_series, hist_opt.as_ref(), relcov_opt.as_ref())?;
     }
 
     Ok(())
 }
 fn write_suite_report_html(
     root: &Path,
-    suite_series_json: &str,
-    hist_json: Option<&str>,
-    relcov_json: Option<&str>,
+    suite_series: &SuiteSeries,
+    hist: Option<&EdgeHistogram>,
+    relcov: Option<&Vec<RelcovEntry>>,
 ) -> Result<()> {
-    let html = render_suite_report(suite_series_json, hist_json, relcov_json);
+    let html = render_suite_report(suite_series, hist, relcov);
     fs::write(root.join("suite_report.html"), html)?;
     Ok(())
 }
@@ -433,7 +428,8 @@ fn aggregate_bench_stats(
         share_dir: path_to_string(&config.share_dir),
         corpus_seed: path_to_string(&config.corpus_seed),
         fuzzer_path: path_to_string(fuzzer_path),
-        bench_snapshot_secs: BENCH_SNAPSHOT_SECS,
+        bench_snapshot_secs: config.bench_snapshot_secs,
+        bench_store_bitmaps: config.bench_store_bitmaps,
         git_commit: git_commit_hash(),
     });
 
@@ -499,6 +495,7 @@ struct BenchMetadata {
     corpus_seed: String,
     fuzzer_path: String,
     bench_snapshot_secs: u64,
+    bench_store_bitmaps: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     git_commit: Option<String>,
 }
@@ -553,6 +550,10 @@ fn compute_relcov_and_hist(run_dir: &Path, summary: &mut BenchSummary) -> Result
 
     let cpu_maps = load_cpu_maps(&bench_dir)?;
     if cpu_maps.is_empty() {
+        log::warn!(
+            "no coverage map files found under {}, relcov/histogram omitted (bench_store_bitmaps disabled?)",
+            bench_dir.display()
+        );
         return Ok(());
     }
 
@@ -721,7 +722,7 @@ fn compute_mutation_stats(run_dir: &Path) -> Result<Option<MutationStats>> {
     }))
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
 struct EdgeHistogram {
     hit_1: usize,
     hit_2_3: usize,
@@ -734,7 +735,7 @@ impl EdgeHistogram {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 struct RelcovEntry {
     cpu: String,
     edges: usize,
@@ -791,49 +792,7 @@ struct SuiteSeries {
 
 /// Parse a merged stats.csv string (with cpu column) into per-CPU series.
 fn parse_stats_series(contents: &str) -> Vec<CpuSeries> {
-    let mut by_cpu: HashMap<String, Vec<(f64, f64, usize)>> = HashMap::new();
-    for (idx, line) in contents.lines().enumerate() {
-        if idx == 0 {
-            continue;
-        }
-        let parts: Vec<_> = line.split(',').collect();
-        if parts.len() < 7 {
-            continue;
-        }
-        let cpu = parts[0].to_string();
-        let Ok(elapsed_s) = parts[1].parse() else {
-            continue;
-        };
-        let Ok(coverage_pct) = parts[4].parse() else {
-            continue;
-        };
-        let Ok(corpus_size) = parts[5].parse() else {
-            continue;
-        };
-        by_cpu
-            .entry(cpu)
-            .or_default()
-            .push((elapsed_s, coverage_pct, corpus_size));
-    }
-    let mut out = Vec::new();
-    for (cpu, mut samples) in by_cpu {
-        samples.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-        let mut elapsed = Vec::with_capacity(samples.len());
-        let mut coverage = Vec::with_capacity(samples.len());
-        let mut corpus = Vec::with_capacity(samples.len());
-        for (e, c, cor) in samples {
-            elapsed.push(e);
-            coverage.push(c);
-            corpus.push(cor);
-        }
-        out.push(CpuSeries {
-            cpu,
-            elapsed,
-            coverage,
-            corpus,
-        });
-    }
-    out
+    group_samples_by_cpu(&parse_stats_csv(contents))
 }
 
 /// Group per-CPU series from merged samples (cpu, BenchSample).
@@ -881,47 +840,54 @@ fn load_suite_samples(root: &Path) -> Result<Vec<(String, BenchSample)>> {
             continue;
         }
         let contents = fs::read_to_string(&stats_path)?;
-        for (idx, line) in contents.lines().enumerate() {
-            if idx == 0 {
-                continue;
-            }
-            let parts: Vec<_> = line.split(',').collect();
-            if parts.len() < 7 {
-                continue;
-            }
-            let cpu = parts[0].to_string();
-            let Ok(elapsed_s) = parts[1].parse() else {
-                continue;
-            };
-            let Ok(execs) = parts[2].parse() else {
-                continue;
-            };
-            let Ok(execs_per_sec) = parts[3].parse() else {
-                continue;
-            };
-            let Ok(coverage_pct) = parts[4].parse() else {
-                continue;
-            };
-            let Ok(corpus_size) = parts[5].parse() else {
-                continue;
-            };
-            let Ok(crashes) = parts[6].parse() else {
-                continue;
-            };
-            suite_samples.push((
-                cpu,
-                BenchSample {
-                    elapsed_s,
-                    execs,
-                    execs_per_sec,
-                    coverage_pct,
-                    corpus_size,
-                    crashes,
-                },
-            ));
-        }
+        suite_samples.extend(parse_stats_csv(&contents));
     }
     Ok(suite_samples)
+}
+
+/// Parse merged stats.csv content (cpu, elapsed_s, execs, execs_per_sec, coverage_pct, corpus_size, crashes).
+fn parse_stats_csv(contents: &str) -> Vec<(String, BenchSample)> {
+    let mut samples = Vec::new();
+    for (idx, line) in contents.lines().enumerate() {
+        if idx == 0 {
+            continue;
+        }
+        let parts: Vec<_> = line.split(',').collect();
+        if parts.len() < 7 {
+            continue;
+        }
+        let cpu = parts[0].to_string();
+        let Ok(elapsed_s) = parts[1].parse() else {
+            continue;
+        };
+        let Ok(execs) = parts[2].parse() else {
+            continue;
+        };
+        let Ok(execs_per_sec) = parts[3].parse() else {
+            continue;
+        };
+        let Ok(coverage_pct) = parts[4].parse() else {
+            continue;
+        };
+        let Ok(corpus_size) = parts[5].parse() else {
+            continue;
+        };
+        let Ok(crashes) = parts[6].parse() else {
+            continue;
+        };
+        samples.push((
+            cpu,
+            BenchSample {
+                elapsed_s,
+                execs,
+                execs_per_sec,
+                coverage_pct,
+                corpus_size,
+                crashes,
+            },
+        ));
+    }
+    samples
 }
 
 /// Bucket samples by elapsed time (ms): round each sample to the nearest ms, group by that key, and average coverage/corpus per bucket.
@@ -1089,6 +1055,10 @@ fn write_run_report(run_dir: &Path) -> Result<()> {
             "  - Bench snapshot interval (s): {}\n",
             meta.bench_snapshot_secs
         ));
+        report.push_str(&format!(
+            "  - Bench store bitmaps: {}\n",
+            meta.bench_store_bitmaps
+        ));
         if let Some(commit) = &meta.git_commit {
             report.push_str(&format!("  - Git commit: {}\n", commit));
         }
@@ -1206,10 +1176,18 @@ fn render_run_report(title: &str, series_json: &str, summary_json: &str) -> Stri
 
 /// Render suite-level report with mean coverage/corpus and optional suite-level histogram/relcov.
 fn render_suite_report(
-    suite_series_json: &str,
-    hist_json: Option<&str>,
-    relcov_json: Option<&str>,
+    suite_series: &SuiteSeries,
+    hist: Option<&EdgeHistogram>,
+    relcov: Option<&Vec<RelcovEntry>>,
 ) -> String {
+    let suite_series_json = serde_json::to_string(suite_series).unwrap_or_else(|_| "null".into());
+    let hist_json = hist
+        .map(|h| serde_json::to_string(h).unwrap_or_else(|_| "null".into()))
+        .unwrap_or_else(|| "null".into());
+    let relcov_json = relcov
+        .map(|r| serde_json::to_string(r).unwrap_or_else(|_| "null".into()))
+        .unwrap_or_else(|| "null".into());
+
     const TEMPLATE: &str = r#"<!doctype html>
 <html lang="en">
 <head>
@@ -1289,9 +1267,9 @@ fn render_suite_report(
 "#;
 
     TEMPLATE
-        .replace("__SUITE_SERIES__", suite_series_json)
-        .replace("__HIST__", hist_json.unwrap_or("null"))
-        .replace("__RELCOV__", relcov_json.unwrap_or("null"))
+        .replace("__SUITE_SERIES__", &suite_series_json)
+        .replace("__HIST__", &hist_json)
+        .replace("__RELCOV__", &relcov_json)
 }
 fn compare_runs(
     baseline_dir: &Path,
