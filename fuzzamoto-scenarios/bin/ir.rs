@@ -7,13 +7,21 @@ use fuzzamoto::{
     fuzzamoto_main,
     oracles::{CrashOracle, Oracle, OracleResult},
     scenarios::{Scenario, ScenarioInput, ScenarioResult, generic::GenericScenario},
-    targets::{BitcoinCoreTarget, ConnectableTarget, HasTipHash, HasTxOutSetInfo, Target},
+    targets::{
+        BitcoinCoreTarget, ConnectableTarget, HasBlockTemplate, HasTipHash, HasTxOutSetInfo, Target,
+    },
 };
 
 #[cfg(feature = "nyx")]
 use fuzzamoto_nyx_sys::*;
 #[cfg(feature = "nyx")]
 use std::ffi::CString;
+
+#[cfg(feature = "oracle_inflation")]
+use fuzzamoto::oracles::InflationOracle;
+
+#[cfg(feature = "oracle_blocktemplate")]
+use fuzzamoto::oracles::BlockTemplateOracle;
 
 #[cfg(feature = "oracle_netsplit")]
 use fuzzamoto::oracles::{NetSplitContext, NetSplitOracle};
@@ -74,7 +82,7 @@ impl<'a> ScenarioInput<'a> for TestCase {
 impl<TX, T> IrScenario<TX, T>
 where
     TX: Transport,
-    T: Target<TX> + HasTipHash + ConnectableTarget + HasTxOutSetInfo,
+    T: Target<TX> + HasTipHash + ConnectableTarget + HasTxOutSetInfo + HasBlockTemplate,
 {
     /// Build the IR program context
     fn build_program_context(inner: &GenericScenario<TX, T>) -> ProgramContext {
@@ -270,6 +278,14 @@ where
             return ScenarioResult::Fail(e.to_string());
         }
 
+        #[cfg(feature = "oracle_blocktemplate")]
+        {
+            let template_oracle = BlockTemplateOracle::<TX>::default();
+            if let OracleResult::Fail(e) = template_oracle.evaluate(&self.inner.target) {
+                return ScenarioResult::Fail(e.to_string());
+            }
+        }
+
         #[cfg(feature = "oracle_inflation")]
         {
             let inflation_oracle = InflationOracle::<TX>::default();
@@ -317,7 +333,7 @@ where
 impl<TX, T> Scenario<'_, TestCase> for IrScenario<TX, T>
 where
     TX: Transport,
-    T: Target<TX> + HasTipHash + ConnectableTarget + HasTxOutSetInfo,
+    T: Target<TX> + HasTipHash + ConnectableTarget + HasTxOutSetInfo + HasBlockTemplate,
 {
     fn new(args: &[String]) -> Result<Self, String> {
         let inner: GenericScenario<TX, T> = GenericScenario::new(args)?;
