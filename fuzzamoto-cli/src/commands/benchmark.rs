@@ -16,6 +16,12 @@ use serde::{Deserialize, Serialize};
 use crate::error::{CliError, Result};
 
 const DEFAULT_FUZZER_PATH: &str = "target/release/fuzzamoto-libafl";
+const RUN_REPORT_HTML: &str = include_str!("../../assets/bench/run.html");
+const RUN_REPORT_JS: &str = include_str!("../../assets/bench/run.js");
+const SUITE_REPORT_HTML: &str = include_str!("../../assets/bench/suite.html");
+const SUITE_REPORT_JS: &str = include_str!("../../assets/bench/suite_report.js");
+const COMPARE_REPORT_HTML: &str = include_str!("../../assets/bench/compare.html");
+const COMPARE_REPORT_JS: &str = include_str!("../../assets/bench/compare.js");
 
 pub struct BenchmarkCommand;
 
@@ -103,6 +109,15 @@ fn default_timeout_ms() -> u64 {
 
 fn default_bench_snapshot_secs() -> u64 {
     30
+}
+
+fn ensure_viewer_assets(root: &Path) -> Result<()> {
+    let viewer_dir = root.join("viewer");
+    fs::create_dir_all(&viewer_dir)?;
+    fs::write(viewer_dir.join("run.js"), RUN_REPORT_JS)?;
+    fs::write(viewer_dir.join("suite_report.js"), SUITE_REPORT_JS)?;
+    fs::write(viewer_dir.join("compare.js"), COMPARE_REPORT_JS)?;
+    Ok(())
 }
 
 fn run_suite(suite: &PathBuf, output: &PathBuf, write_html: bool) -> Result<()> {
@@ -295,7 +310,7 @@ fn aggregate_suite(root: &Path, write_html: bool) -> Result<()> {
     )?;
 
     if write_html {
-        write_suite_report_html(root, &suite_series, hist_opt.as_ref(), relcov_opt.as_ref())?;
+        write_suite_report_html(root, &suite_series, &suite_summary)?;
     }
 
     Ok(())
@@ -303,11 +318,18 @@ fn aggregate_suite(root: &Path, write_html: bool) -> Result<()> {
 fn write_suite_report_html(
     root: &Path,
     suite_series: &SuiteSeries,
-    hist: Option<&EdgeHistogram>,
-    relcov: Option<&Vec<RelcovEntry>>,
+    suite_summary: &SuiteSummary,
 ) -> Result<()> {
-    let html = render_suite_report(suite_series, hist, relcov);
-    fs::write(root.join("suite_report.html"), html)?;
+    ensure_viewer_assets(root)?;
+    let data = SuiteReportData {
+        suite_series,
+        suite_summary,
+    };
+    fs::write(
+        root.join("suite_report_data.json"),
+        serde_json::to_vec_pretty(&data)?,
+    )?;
+    fs::write(root.join("suite_report.html"), SUITE_REPORT_HTML)?;
     Ok(())
 }
 
@@ -544,7 +566,7 @@ fn compute_relcov_and_hist(run_dir: &Path, summary: &mut BenchSummary) -> Result
     let cpu_maps = load_cpu_maps(&bench_dir)?;
     if cpu_maps.is_empty() {
         log::warn!(
-            "no coverage map files found under {}, relcov/histogram omitted (bench_store_bitmaps disabled?)",
+            "no coverage map files found under {}, relcov/histogram omitted",
             bench_dir.display()
         );
         return Ok(());
@@ -783,9 +805,32 @@ struct SuiteSeries {
     corpus_mean: Vec<f64>,
 }
 
-/// Parse a merged stats.csv string (with cpu column) into per-CPU series.
-fn parse_stats_series(contents: &str) -> Vec<CpuSeries> {
-    group_samples_by_cpu(&parse_stats_csv(contents))
+#[derive(Serialize)]
+struct RunReportData<'a> {
+    series: Vec<CpuSeries>,
+    summary: &'a BenchSummary,
+}
+
+#[derive(Serialize)]
+struct SuiteReportData<'a> {
+    suite_series: &'a SuiteSeries,
+    suite_summary: &'a SuiteSummary,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "lowercase")]
+enum CompareMode {
+    Run,
+    Suite,
+}
+
+#[derive(Serialize)]
+struct CompareData {
+    mode: CompareMode,
+    baseline_label: String,
+    candidate_label: String,
+    baseline: SuiteSeries,
+    candidate: SuiteSeries,
 }
 
 /// Group per-CPU series from merged samples (cpu, BenchSample).
@@ -912,53 +957,6 @@ fn bucket_mean_series(samples: &[(String, BenchSample)]) -> SuiteSeries {
     suite_series
 }
 
-fn render_compare_series(
-    title: &str,
-    base_series_json: &str,
-    cand_series_json: &str,
-    coverage_title: &str,
-    corpus_title: &str,
-) -> String {
-    let body = r#"
-  <div id="cov" class="chart"></div>
-  <div id="corpus" class="chart"></div>
-"#;
-    let script = r#"
-    const base = __BASE__;
-    const cand = __CAND__;
-
-    function plot(div, field, plotTitle, yTitle) {
-      Plotly.newPlot(div, [
-        {
-          x: base.elapsed,
-          y: base[field],
-          mode: 'lines',
-          name: 'baseline'
-        },
-        {
-          x: cand.elapsed,
-          y: cand[field],
-          mode: 'lines',
-          name: 'candidate'
-        }
-      ], {
-        title: plotTitle,
-        xaxis: { title: 'Elapsed (s)' },
-        yaxis: { title: yTitle },
-        legend: { orientation: 'h' }
-      });
-    }
-
-    plot('cov', 'coverage_mean', '__COV_TITLE__', 'Coverage (%)');
-    plot('corpus', 'corpus_mean', '__CORPUS_TITLE__', 'Corpus size');
-    "#
-    .replace("__BASE__", base_series_json)
-    .replace("__CAND__", cand_series_json)
-    .replace("__COV_TITLE__", coverage_title)
-    .replace("__CORPUS_TITLE__", corpus_title);
-    render_plotly_page(title, body, &script)
-}
-
 fn write_run_report(run_dir: &Path) -> Result<()> {
     let summary_path = run_dir.join("summary.json");
     if !summary_path.exists() {
@@ -1054,192 +1052,19 @@ fn write_run_report_html(
         return Ok(());
     }
 
-    let series_json = serde_json::to_string(&group_samples_by_cpu(samples))?;
-    let summary_json = serde_json::to_string(summary)?;
+    let data = RunReportData {
+        series: group_samples_by_cpu(samples),
+        summary,
+    };
     fs::write(
-        run_dir.join("report.html"),
-        render_run_report("Fuzzamoto Bench Report", &series_json, &summary_json),
+        run_dir.join("report_data.json"),
+        serde_json::to_vec_pretty(&data)?,
     )?;
+    if let Some(root) = run_dir.parent() {
+        ensure_viewer_assets(root)?;
+    }
+    fs::write(run_dir.join("report.html"), RUN_REPORT_HTML)?;
     Ok(())
-}
-
-/// Render run-level report with time-series plus relcov/histogram (if available in summary).
-fn render_run_report(title: &str, series_json: &str, summary_json: &str) -> String {
-    let body = r#"
-  <div id="coverage" class="chart"></div>
-  <div id="corpus" class="chart"></div>
-  <div id="edge_hist" class="chart"></div>
-  <div id="relcov" class="chart"></div>
-"#;
-
-    let script = r#"
-    const series = __SERIES__;
-    const summary = __SUMMARY__;
-
-    const chartSpecs = [
-      { div: 'coverage', field: 'coverage', title: 'Coverage (%) vs Time', y: 'Coverage (%)' },
-      { div: 'corpus',   field: 'corpus',   title: 'Corpus Size vs Time', y: 'Corpus size'   },
-    ];
-    chartSpecs.forEach(spec => {
-      const traces = series.map(s => ({
-        x: s.elapsed,
-        y: s[spec.field],
-        mode: 'lines',
-        name: s.cpu,
-      }));
-      Plotly.newPlot(spec.div, traces, {
-        title: spec.title,
-        xaxis: { title: 'Elapsed (s)' },
-        yaxis: { title: spec.y },
-        legend: { orientation: 'h' }
-      });
-    });
-
-    if (summary.edge_histogram) {
-      Plotly.newPlot('edge_hist', [{
-        type: 'bar',
-        x: ['1-hit', '2-3 hits', '>=4 hits'],
-        y: [summary.edge_histogram.hit_1, summary.edge_histogram.hit_2_3, summary.edge_histogram.hit_ge_4],
-        name: 'edges'
-      }], {
-        title: 'Edge Histogram',
-        xaxis: {title: 'Bucket'},
-        yaxis: {title: 'Count'},
-        legend: {orientation: 'h'}
-      });
-    }
-
-    if (summary.per_cpu_relcov) {
-      Plotly.newPlot('relcov', [{
-        type: 'bar',
-        x: summary.per_cpu_relcov.map(e => e.cpu),
-        y: summary.per_cpu_relcov.map(e => e.relcov_pct),
-        name: 'relcov'
-      }], {
-        title: 'Per-CPU Relative Coverage (%)',
-        xaxis: {title: 'CPU'},
-        yaxis: {title: 'Relcov (%)'},
-        legend: {orientation: 'h'}
-      });
-    }
-    "#.replace("__SERIES__", series_json)
-        .replace("__SUMMARY__", summary_json);
-
-    render_plotly_page(title, body, &script)
-}
-
-/// Render suite-level report with mean coverage/corpus and optional suite-level histogram/relcov.
-fn render_suite_report(
-    suite_series: &SuiteSeries,
-    hist: Option<&EdgeHistogram>,
-    relcov: Option<&Vec<RelcovEntry>>,
-) -> String {
-    let suite_series_json = serde_json::to_string(suite_series).unwrap_or_else(|_| "null".into());
-    let hist_json = hist
-        .map(|h| serde_json::to_string(h).unwrap_or_else(|_| "null".into()))
-        .unwrap_or_else(|| "null".into());
-    let relcov_json = relcov
-        .map(|r| serde_json::to_string(r).unwrap_or_else(|_| "null".into()))
-        .unwrap_or_else(|| "null".into());
-
-    let body = r#"
-  <div id="suite_coverage" class="chart"></div>
-  <div id="suite_corpus" class="chart"></div>
-  <div id="suite_edge_hist" class="chart"></div>
-  <div id="suite_relcov" class="chart"></div>
-"#;
-
-    let script = r#"
-    const series = __SERIES__;
-    const hist = __HIST__;
-    const relcov = __RELCOV__;
-
-    Plotly.newPlot('suite_coverage', [{
-      x: series.elapsed,
-      y: series.coverage_mean,
-      mode: 'lines',
-      name: 'coverage'
-    }], {
-      title: 'Coverage (%) vs Time (mean across runs)',
-      xaxis: { title: 'Elapsed (s)' },
-      yaxis: { title: 'Coverage (%)' },
-      legend: { orientation: 'h' }
-    });
-
-    Plotly.newPlot('suite_corpus', [{
-      x: series.elapsed,
-      y: series.corpus_mean,
-      mode: 'lines',
-      name: 'corpus'
-    }], {
-      title: 'Corpus Size vs Time (mean across runs)',
-      xaxis: { title: 'Elapsed (s)' },
-      yaxis: { title: 'Corpus size' },
-      legend: { orientation: 'h' }
-    });
-
-    if (hist) {
-      Plotly.newPlot('suite_edge_hist', [{
-        type: 'bar',
-        x: ['1-hit', '2-3 hits', '>=4 hits'],
-        y: [hist.hit_1, hist.hit_2_3, hist.hit_ge_4],
-        name: 'edges'
-      }], {
-        title: 'Edge Histogram (sum across runs)',
-        xaxis: {title: 'Bucket'},
-        yaxis: {title: 'Count'},
-        legend: {orientation: 'h'}
-      });
-    }
-
-    if (relcov) {
-      Plotly.newPlot('suite_relcov', [{
-        type: 'bar',
-        x: relcov.map(e => e.cpu),
-        y: relcov.map(e => e.relcov_pct),
-        name: 'relcov'
-      }], {
-        title: 'Per-CPU Relative Coverage (%) (mean across runs)',
-        xaxis: {title: 'CPU'},
-        yaxis: {title: 'Relcov (%)'},
-        legend: {orientation: 'h'}
-      });
-    }
-    "#
-    .replace("__SERIES__", &suite_series_json)
-    .replace("__HIST__", &hist_json)
-    .replace("__RELCOV__", &relcov_json);
-
-    render_plotly_page("Fuzzamoto Bench Suite Report", body, &script)
-}
-
-/// Shared Plotly page template
-fn render_plotly_page(title: &str, body: &str, script: &str) -> String {
-    format!(
-        r#"<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <title>{title}</title>
-  <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.29.1/plotly.min.js"></script>
-  <style>
-    body {{ font-family: sans-serif; margin: 16px; }}
-    .chart {{ width: 100%; max-width: 1100px; height: 420px; margin-bottom: 28px; }}
-  </style>
-</head>
-<body>
-  <h1>{title}</h1>
-{body}
-  <script>
-{script}
-  </script>
-</body>
-</html>
-"#,
-        title = title,
-        body = body,
-        script = script
-    )
 }
 fn compare_runs(
     baseline_dir: &Path,
@@ -1343,40 +1168,46 @@ fn write_compare_report_html(baseline_dir: &Path, candidate_dir: &Path) -> Resul
     let base_stats = fs::read_to_string(baseline_dir.join("stats.csv"))?;
     let cand_stats = fs::read_to_string(candidate_dir.join("stats.csv"))?;
 
-    let base_series = serde_json::to_string(&parse_stats_series(&base_stats))?;
-    let cand_series = serde_json::to_string(&parse_stats_series(&cand_stats))?;
+    let base_series = bucket_mean_series(&parse_stats_csv(&base_stats));
+    let cand_series = bucket_mean_series(&parse_stats_csv(&cand_stats));
+
+    let data = CompareData {
+        mode: CompareMode::Run,
+        baseline_label: path_to_string(baseline_dir),
+        candidate_label: path_to_string(candidate_dir),
+        baseline: base_series,
+        candidate: cand_series,
+    };
 
     let out_dir = baseline_dir.parent().unwrap_or_else(|| Path::new("."));
+    ensure_viewer_assets(out_dir)?;
+    fs::write(out_dir.join("compare.html"), COMPARE_REPORT_HTML)?;
     fs::write(
-        out_dir.join("compare.html"),
-        render_compare_series(
-            "Benchmark Compare",
-            &base_series,
-            &cand_series,
-            "Coverage vs Time",
-            "Corpus vs Time",
-        ),
+        out_dir.join("compare_data.json"),
+        serde_json::to_vec_pretty(&data)?,
     )?;
     Ok(())
 }
 
 /// Compare two suite roots by averaging their run_* stats and plotting mean coverage/corpus.
 fn write_compare_suite_html(baseline_root: &Path, candidate_root: &Path) -> Result<()> {
-    let base_series =
-        serde_json::to_string(&bucket_mean_series(&load_suite_samples(baseline_root)?))?;
-    let cand_series =
-        serde_json::to_string(&bucket_mean_series(&load_suite_samples(candidate_root)?))?;
+    let base_series = bucket_mean_series(&load_suite_samples(baseline_root)?);
+    let cand_series = bucket_mean_series(&load_suite_samples(candidate_root)?);
+
+    let data = CompareData {
+        mode: CompareMode::Suite,
+        baseline_label: path_to_string(baseline_root),
+        candidate_label: path_to_string(candidate_root),
+        baseline: base_series,
+        candidate: cand_series,
+    };
 
     let out_dir = baseline_root.parent().unwrap_or_else(|| Path::new("."));
+    ensure_viewer_assets(out_dir)?;
+    fs::write(out_dir.join("compare.html"), COMPARE_REPORT_HTML)?;
     fs::write(
-        out_dir.join("compare.html"),
-        render_compare_series(
-            "Benchmark Suite Compare",
-            &base_series,
-            &cand_series,
-            "Coverage vs Time (mean across runs)",
-            "Corpus vs Time (mean across runs)",
-        ),
+        out_dir.join("compare_data.json"),
+        serde_json::to_vec_pretty(&data)?,
     )?;
     Ok(())
 }
