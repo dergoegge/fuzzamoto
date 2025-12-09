@@ -64,4 +64,11 @@ pub enum Variable {
     MutBlockTxn,
     ConstBlockTxn,
     ConstCoinbaseTx,
+
+    TaprootSpendInfo,
+    TaprootKeypair,
+    TaprootLeaf,
+    TaprootLeafVersion,
+    MutTaprootTree,
+    TaprootAnnex,
 }

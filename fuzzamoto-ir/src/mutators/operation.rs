@@ -118,6 +118,20 @@ impl<R: RngCore, M: OperationByteMutator> Mutator<R> for OperationMutator<M> {
                     .clone()
             }
 
+            Operation::AddTapLeaf { depth } => {
+                // mutate the leaf depth to exercise different tree shapes without exploding depth.
+                let upper = (*depth).saturating_add(6).min(32);
+                let mut new_depth = *depth;
+                for _ in 0..8 {
+                    let candidate = rng.gen_range(0..=upper);
+                    if candidate != *depth {
+                        new_depth = candidate;
+                        break;
+                    }
+                }
+                Operation::AddTapLeaf { depth: new_depth }
+            }
+
             Operation::LoadPrivateKey(current_key) => {
                 let mut new_key: Vec<u8> = current_key.into();
                 let mut valid_key = false;
@@ -228,6 +242,17 @@ impl<R: RngCore, M: OperationByteMutator> Mutator<R> for OperationMutator<M> {
                 .choose(rng)
                 .unwrap(),
             ),
+            Operation::LoadTaprootAnnex { annex } => {
+                self.byte_array_mutator.mutate_bytes(annex);
+                if annex.is_empty() || annex[0] != 0x50 {
+                    annex.insert(0, 0x50);
+                } else {
+                    annex[0] = 0x50;
+                }
+                Operation::LoadTaprootAnnex {
+                    annex: annex.clone(),
+                }
+            }
             Operation::LoadTxVersion(version) => Operation::LoadTxVersion(
                 // Standard tx version should be added here
                 *[0u32, 1, 2, 3, 4, 0xffffffff - 1, 0xffffffff, rng.r#gen()]

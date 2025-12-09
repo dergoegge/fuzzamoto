@@ -383,7 +383,6 @@ where
 
         let txos = Self::build_txos(&inner);
         let headers = Self::build_headers(&inner);
-
         Self::dump_context(context, txos, headers)?;
 
         #[cfg(any(feature = "oracle_netsplit", feature = "oracle_consensus"))]
