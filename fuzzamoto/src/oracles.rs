@@ -1,6 +1,9 @@
 use crate::{
     connections::Transport,
-    targets::{ConnectableTarget, HasTipHash, HasTxOutSetInfo, Target, bitcoin_core::TxOutSetInfo},
+    targets::{
+        ConnectableTarget, HasBlockTemplate, HasTipHash, HasTxOutSetInfo, Target,
+        bitcoin_core::TxOutSetInfo,
+    },
 };
 use std::{
     marker::PhantomData,
@@ -252,5 +255,30 @@ mod tests {
             );
             assert_eq!(total, expected_total);
         }
+    }
+}
+
+pub struct BlockTemplateOracle<TX>(PhantomData<TX>);
+
+impl<TX> Default for BlockTemplateOracle<TX> {
+    fn default() -> Self {
+        Self(PhantomData)
+    }
+}
+
+impl<T, TX> Oracle<T> for BlockTemplateOracle<TX>
+where
+    TX: Transport,
+    T: Target<TX> + HasBlockTemplate,
+{
+    fn evaluate(&self, target: &T) -> OracleResult {
+        match target.block_template() {
+            Ok(_) => OracleResult::Pass,
+            Err(e) => OracleResult::Fail(e.to_string()),
+        }
+    }
+
+    fn name(&self) -> &str {
+        "BlockTemplateOracle"
     }
 }

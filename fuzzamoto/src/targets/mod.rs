@@ -55,3 +55,7 @@ pub trait HasTipHash {
 pub trait HasTxOutSetInfo {
     fn tx_out_set_info(&self) -> Result<TxOutSetInfo, String>;
 }
+
+pub trait HasBlockTemplate {
+    fn block_template(&self) -> Result<(), String>;
+}
