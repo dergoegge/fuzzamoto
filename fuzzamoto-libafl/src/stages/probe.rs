@@ -85,6 +85,15 @@ where
                     reason
                 );
             }
+            ProbeResult::RecentBlockes { result } => {
+                let current = *state.corpus().current();
+                if let Some(cur) = current
+                    && let Ok(meta) = state.metadata_mut::<RuntimeMetadata>()
+                {
+                    let txvec = meta.metadatas.entry(cur).or_default();
+                    txvec.add_recent_blocks(result.clone())
+                }
+            }
         }
     }
 }
@@ -126,6 +135,7 @@ where
         // we don't have to care worry about adjusting variable indices here
         debug_assert_eq!(Operation::Probe.num_outputs(), 0);
         let mut builder = fuzzamoto_ir::ProgramBuilder::new(input.ir().context.clone());
+        assert!(builder.instructions.is_empty());
         builder
             .append(Instruction {
                 inputs: vec![],
