@@ -441,6 +441,9 @@ containing the correctly serialized transactions <code>v15</code> and <code>v30<
 <tr><td align="left"><code>LoadSigHashFlags</code></td><td align="left">Loads signature hash flags.</td></tr>
 <tr><td align="left"><code>LoadTxo</code></td><td align="left">Loads a transaction output from the context.</td></tr>
 <tr><td align="left"><code>LoadHeader</code></td><td align="left">Loads a block header from the context.</td></tr>
+<tr><td align="left"><code>LoadNonce</code></td><td align="left">Loads a nonce.</td></tr>
+<tr><td align="left"><code>LoadFilterLoad</code></td><td align="left">Loads a filter for <code>filterload</code> message.</td></tr>
+<tr><td align="left"><code>LoadFilterAdd</code></td><td align="left">Loads data for <code>filteradd</code> message.</td></tr>
 <tr><td align="left"><strong>Time operations</strong></td><td align="left"><strong>Manipulate the mock time.</strong></td></tr>
 <tr><td align="left"><code>AdvanceTime</code></td><td align="left">Advances time by a given duration.</td></tr>
 <tr><td align="left"><code>SetTime</code></td><td align="left">Sets the mock time to a specific value.</td></tr>
@@ -457,6 +460,19 @@ containing the correctly serialized transactions <code>v15</code> and <code>v30<
 <tr><td align="left"><code>BeginWitnessStack</code></td><td align="left">Begins building a witness stack.</td></tr>
 <tr><td align="left"><code>AddWitness</code></td><td align="left">Adds an item to the witness stack.</td></tr>
 <tr><td align="left"><code>EndWitnessStack</code></td><td align="left">Finishes building the witness stack.</td></tr>
+<tr><td align="left"><strong>Compact Block</strong></td><td align="left"><strong>Construct a compact block.</strong></td></tr>
+<tr><td align="left"><code>BuildCompactBlock</code></td><td align="left">Builds a compact block.</td></tr>
+<tr><td align="left"><strong>Blocktxn building</strong></td><td align="left"><strong>Construct a BIP152 blocktxn message</strong></td></tr>
+<tr><td align="left"><code>BeginBuildBlockTxn</code></td><td align="left">Begins building a blocktxn message after sending a compact block.</td></tr>
+<tr><td align="left"><code>AddTxToBlockTxn</code></td><td align="left">Adds a transaction to the blocktxn message.</td></tr>
+<tr><td align="left"><code>EndBuildBlockTxn</code></td><td align="left">Finishes building a blocktxn message.</td></tr>
+<tr><td align="left"><strong>Filter building</strong></td><td align="left"><strong>Construct a BIP37 filter.</strong></td></tr>
+<tr><td align="left"><code>BeginBuildFilterLoad</code></td><td align="left">Begins building a filter.</td></tr>
+<tr><td align="left"><code>AddTxToFilter</code></td><td align="left">Adds a transaction to a filter.</td></tr>
+<tr><td align="left"><code>AddTxoToFilter</code></td><td align="left">Adds an output to a filter.</td></tr>
+<tr><td align="left"><code>EndBuildFilterLoad</code></td><td align="left">Finishes building a filter.</td></tr>
+<tr><td align="left"><code>BuildFilterAddFromTx</code></td><td align="left">Builds a <code>filteradd</code> message from a transaction.</td></tr>
+<tr><td align="left"><code>BuildFilterAddFromTxo</code></td><td align="left">Builds a <code>filteradd</code> message from an output.</td></tr>
 <tr><td align="left"><strong>Transaction building</strong></td><td align="left"><strong>Construct a transaction.</strong></td></tr>
 <tr><td align="left"><code>BeginBuildTx</code></td><td align="left">Begins building a transaction.</td></tr>
 <tr><td align="left"><code>BeginBuildTxInputs</code></td><td align="left">Begins building transaction inputs.</td></tr>
@@ -493,8 +509,11 @@ containing the correctly serialized transactions <code>v15</code> and <code>v30<
 <tr><td align="left"><code>SendGetCFilters</code></td><td align="left">Sends a <code>getcfilters</code> message.</td></tr>
 <tr><td align="left"><code>SendGetCFHeaders</code></td><td align="left">Sends a <code>getcfheaders</code> message.</td></tr>
 <tr><td align="left"><code>SendGetCFCheckpt</code></td><td align="left">Sends a <code>getcfcheckpt</code> message.</td></tr>
+<tr><td align="left"><code>SendCompactBlock</code></td><td align="left">Sends a <code>cmpctblock</code> message.</td></tr>
+<tr><td align="left"><code>SendBlockTxn</code></td><td align="left">Sends a <code>blocktxn</code> message.</td></tr>
 <tr><td align="left"><strong>Other</strong></td><td align="left"></td></tr>
 <tr><td align="left"><code>Nop</code></td><td align="left">No operation. Used during minimization.</td></tr>
+<tr><td align="left"><code>Probe</code></td><td align="left">Tells the scenario to probe state for the fuzzer (e.g. received messages, tip hash, ...).</td></tr>
 </tbody></table>
 <h3 id="mutators"><a class="header" href="#mutators">Mutators</a></h3>
 <p>Several mutation strategies are available for IR programs:</p>
