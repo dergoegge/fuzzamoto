@@ -335,6 +335,40 @@ pub enum ProbeResult {
         /// The reason for why it failed to decode
         reason: String,
     },
+    RecentBlockes {
+        result: Vec<RecentBlock>,
+    },
 }
 
 pub type ProbeResults = Vec<ProbeResult>;
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RecentBlock {
+    /// height of this block
+    pub height: u64,
+    /// The hash of a recent block
+    pub hash: [u8; 32],
+    /// Variable index of this block if it is defined in the testcase
+    pub defining_block: Option<(usize, usize)>,
+}
+
+impl PartialEq for RecentBlock {
+    fn eq(&self, other: &Self) -> bool {
+        self.height == other.height
+    }
+}
+
+impl Eq for RecentBlock {}
+
+// Ordering based only on height
+impl PartialOrd for RecentBlock {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.height.cmp(&other.height))
+    }
+}
+
+impl Ord for RecentBlock {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.height.cmp(&other.height)
+    }
+}

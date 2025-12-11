@@ -15,7 +15,9 @@ impl<R: RngCore> Generator<R> for BlockTxnGenerator {
         rng: &mut R,
         meta: Option<&PerTestcaseMetadata>,
     ) -> GeneratorResult {
-        if let Some(meta) = meta {
+        if let Some(meta) = meta
+            && !meta.block_txn_request().is_empty()
+        {
             let insertion_point = builder.instructions.len();
             assert_eq!(
                 builder
@@ -123,7 +125,9 @@ impl<R: RngCore> Generator<R> for BlockTxnGenerator {
         rng: &mut R,
         meta: Option<&PerTestcaseMetadata>,
     ) -> Option<usize> {
-        if let Some(meta) = meta {
+        if let Some(meta) = meta
+            && !meta.block_txn_request().is_empty()
+        {
             let blocktxn_req = meta.block_txn_request();
             let choice = rng.gen_range(0..blocktxn_req.len());
             let insertion_point = blocktxn_req[choice].triggering_instruction_index + 1;

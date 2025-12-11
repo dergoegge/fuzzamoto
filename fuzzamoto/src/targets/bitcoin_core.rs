@@ -1,16 +1,19 @@
 use crate::{
     connections::{Connection, ConnectionType, V1Transport},
-    targets::{HasTxOutSetInfo, Target},
+    targets::{
+        HasGetBestBlockHash, HasGetBlock, HasGetBlockCount, HasGetBlockHash, HasGetTxOutSetInfo,
+        Target,
+    },
 };
 
-use bitcoin::{Amount, hashes::Hash};
+use bitcoin::{Amount, Block, BlockHash};
 use corepc_node::{Conf, Node, P2P};
 use std::{
     net::{SocketAddrV4, TcpListener, TcpStream},
     str::FromStr,
 };
 
-use super::{ConnectableTarget, HasTipHash};
+use super::ConnectableTarget;
 
 pub struct BitcoinCoreTarget {
     pub node: Node,
@@ -226,13 +229,37 @@ impl ConnectableTarget for BitcoinCoreTarget {
     }
 }
 
-impl HasTipHash for BitcoinCoreTarget {
-    fn get_tip_hash(&self) -> Option<[u8; 32]> {
+impl HasGetBestBlockHash for BitcoinCoreTarget {
+    fn getbestblockhash(&self) -> Option<BlockHash> {
         match self.node.client.get_best_block_hash() {
-            Ok(result) => result
-                .block_hash()
-                .ok()
-                .map(|h| *h.as_raw_hash().as_byte_array()),
+            Ok(result) => result.block_hash().ok(),
+            Err(_) => None,
+        }
+    }
+}
+
+impl HasGetBlockCount for BitcoinCoreTarget {
+    fn getblockcount(&self) -> Option<u64> {
+        match self.node.client.get_block_count() {
+            Ok(result) => Some(result.0),
+            Err(_) => None,
+        }
+    }
+}
+
+impl HasGetBlock for BitcoinCoreTarget {
+    fn getblock(&self, hash: BlockHash) -> Option<Block> {
+        match self.node.client.get_block(hash) {
+            Ok(result) => Some(result),
+            Err(_) => None,
+        }
+    }
+}
+
+impl HasGetBlockHash for BitcoinCoreTarget {
+    fn getblockhash(&self, height: u64) -> Option<BlockHash> {
+        match self.node.client.get_block_hash(height) {
+            Ok(result) => result.block_hash().ok(),
             Err(_) => None,
         }
     }
@@ -254,8 +281,8 @@ impl TxOutSetInfo {
     }
 }
 
-impl HasTxOutSetInfo for BitcoinCoreTarget {
-    fn tx_out_set_info(&self) -> Result<TxOutSetInfo, String> {
+impl HasGetTxOutSetInfo for BitcoinCoreTarget {
+    fn gettxoutsetinfo(&self) -> Result<TxOutSetInfo, String> {
         let txoutsetinfo = self
             .node
             .client

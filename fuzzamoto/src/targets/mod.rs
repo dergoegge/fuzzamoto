@@ -5,6 +5,7 @@ use crate::{
     connections::{Connection, ConnectionType, Transport},
     targets::bitcoin_core::TxOutSetInfo,
 };
+use bitcoin::{Block, BlockHash};
 use std::net::SocketAddrV4;
 
 /// `Target` is the interface that the test harness will use to interact with the target Bitcoin
@@ -48,10 +49,34 @@ pub trait ConnectableTarget {
     fn is_connected_to<O: ConnectableTarget>(&self, other: &O) -> bool;
 }
 
-pub trait HasTipHash {
-    fn get_tip_hash(&self) -> Option<[u8; 32]>;
+pub trait HasGetBestBlockHash {
+    fn getbestblockhash(&self) -> Option<BlockHash>;
 }
 
-pub trait HasTxOutSetInfo {
-    fn tx_out_set_info(&self) -> Result<TxOutSetInfo, String>;
+pub trait HasGetBlockCount {
+    fn getblockcount(&self) -> Option<u64>;
+}
+
+pub trait HasGetBlockHash {
+    fn getblockhash(&self, height: u64) -> Option<BlockHash>;
+}
+
+pub trait HasGetBlock {
+    fn getblock(&self, hash: BlockHash) -> Option<Block>;
+}
+
+pub trait HasGetTxOutSetInfo {
+    fn gettxoutsetinfo(&self) -> Result<TxOutSetInfo, String>;
+}
+
+pub trait HasBlockChainRPC:
+    HasGetBlockCount + HasGetBlockHash + HasGetBlock + HasGetTxOutSetInfo + HasGetBestBlockHash
+{
+}
+
+// blanket impl
+impl<
+    Target: HasGetBlockCount + HasGetBlockHash + HasGetBlock + HasGetTxOutSetInfo + HasGetBestBlockHash,
+> HasBlockChainRPC for Target
+{
 }
