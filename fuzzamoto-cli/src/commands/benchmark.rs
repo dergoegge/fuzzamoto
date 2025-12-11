@@ -5,10 +5,17 @@ use std::{
     fs::{self, File},
     io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Child, Command, Stdio},
     thread,
     time::{Duration, Instant},
 };
+
+#[cfg(unix)]
+use nix::sys::signal::{Signal, kill, killpg};
+#[cfg(unix)]
+use nix::unistd::{Pid, getpgid};
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 
 use clap::Subcommand;
 use serde::{Deserialize, Serialize};
@@ -192,6 +199,10 @@ fn run_single(
         .arg("--bench-snapshot-secs")
         .arg(config.bench_snapshot_secs.to_string());
 
+    // Create new process group so we can terminate all child processes
+    #[cfg(unix)]
+    command.process_group(0);
+
     let mut child = command
         .stdout(Stdio::from(log_file))
         .stderr(Stdio::from(log_clone))
@@ -210,10 +221,7 @@ fn run_single(
 
         if Instant::now() >= deadline {
             log::info!("Benchmark duration reached, terminating fuzzer");
-            child
-                .kill()
-                .map_err(|e| CliError::ProcessError(format!("failed to kill fuzzer: {e}")))?;
-            let _ = child.wait();
+            kill_process_tree(&mut child);
             break;
         }
 
@@ -1260,4 +1268,40 @@ fn git_commit_hash() -> Option<String> {
     }
     let commit = String::from_utf8(output.stdout).ok()?;
     Some(commit.trim().to_string())
+}
+
+/// Gracefully terminate a process and all its children in the process group.
+///
+/// Sends SIGTERM first for graceful shutdown, waits briefly, then SIGKILL if needed.
+#[cfg(unix)]
+fn kill_process_tree(child: &mut Child) {
+    let pid = Pid::from_raw(child.id() as i32);
+
+    // Get the process group ID
+    let pgid = match getpgid(Some(pid)) {
+        Ok(pgid) => pgid,
+        Err(_) => {
+            // Fallback: if we can't get PGID, just kill the process
+            let _ = kill(pid, Signal::SIGTERM);
+            thread::sleep(Duration::from_secs(2));
+            if child.try_wait().ok().flatten().is_none() {
+                let _ = kill(pid, Signal::SIGKILL);
+            }
+            let _ = child.wait();
+            return;
+        }
+    };
+
+    // Try graceful shutdown first
+    let _ = killpg(pgid, Signal::SIGTERM);
+
+    // Give processes time to clean up
+    thread::sleep(Duration::from_secs(2));
+
+    // Force kill if still running
+    if child.try_wait().ok().flatten().is_none() {
+        let _ = killpg(pgid, Signal::SIGKILL);
+    }
+
+    let _ = child.wait();
 }
