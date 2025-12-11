@@ -71,6 +71,8 @@ pub struct CompiledMetadata {
     connection_map: HashMap<ConnectionId, VariableIndex>,
     // List of instruction indices that correspond to actions in the compiled program (does not include probe operation)
     action_indices: Vec<InstructionIndex>,
+    // A vector representing where each variable is defined.
+    variable_indices: Vec<InstructionIndex>,
     /// The number of non-probe instructions compiled
     instructions: usize,
 }
@@ -81,6 +83,7 @@ impl CompiledMetadata {
             block_tx_var_map: HashMap::new(),
             connection_map: HashMap::new(),
             action_indices: Vec::new(),
+            variable_indices: Vec::new(),
             instructions: 0,
         }
     }
@@ -95,6 +98,11 @@ impl CompiledMetadata {
     // Get the list of instruction indices that correspond to actions in the compiled program
     pub fn instruction_indices(&self) -> &[InstructionIndex] {
         &self.action_indices
+    }
+
+    // Get the list of instruction indices that correspond to variables in the compiled program
+    pub fn variable_indices(&self) -> &[InstructionIndex] {
+        &self.variable_indices
     }
 
     pub fn connection_map(&self) -> &HashMap<ConnectionId, VariableIndex> {
@@ -1515,6 +1523,10 @@ impl Compiler {
     }
 
     fn append_variable<T: 'static>(&mut self, value: T) {
+        self.output
+            .metadata
+            .variable_indices
+            .push(self.output.metadata.instructions);
         self.variables.push(Box::new(value));
     }
 
