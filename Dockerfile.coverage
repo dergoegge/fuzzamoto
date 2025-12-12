@@ -2,28 +2,30 @@ FROM debian:bookworm
 
 # ------ Coverage for fuzzamoto ------
 
-ARG LLVM_V=19
+ARG LLVM_V=21
+
+# Add the LLVM apt repo
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates gnupg lsb-release software-properties-common wget && \
+  wget https://apt.llvm.org/llvm.sh && \
+  chmod +x llvm.sh && \
+  ./llvm.sh ${LLVM_V}
 
 # Install LLVM toolchain & Bitcoin Core build dependencies
 # vim & tmux are useful
-RUN apt-get update && apt-get install -y --no-install-recommends software-properties-common wget && \
-    wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc && \
-    apt-add-repository "deb http://apt.llvm.org/bookworm/ llvm-toolchain-bookworm-${LLVM_V} main" && \
-    apt-add-repository "deb-src http://apt.llvm.org/bookworm/ llvm-toolchain-bookworm-${LLVM_V} main" && \
-    apt-get update && apt install -y --no-install-recommends \
-    build-essential \
-    clang-${LLVM_V} \
-    cmake \
-    curl \
-    git \
-    libclang-rt-${LLVM_V}-dev \
-    lld-${LLVM_V} \
-    llvm-${LLVM_V} \
-    llvm-${LLVM_V}-dev \
-    patch \
-    python3 \
-    tmux \
-    vim
+RUN apt-get update && apt install -y --no-install-recommends \
+  build-essential \
+  clang-${LLVM_V} \
+  cmake \
+  curl \
+  git \
+  libclang-rt-${LLVM_V}-dev \
+  lld-${LLVM_V} \
+  llvm-${LLVM_V} \
+  llvm-${LLVM_V}-dev \
+  patch \
+  python3 \
+  tmux \
+  vim
 
 # Install rust and tools
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y

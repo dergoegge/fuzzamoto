@@ -2,16 +2,17 @@ FROM debian:bookworm
 
 # ------ Build and install dependencies ------
 
-ARG LLVM_V=19
+ARG LLVM_V=21
 
-# Make sure we can install the llvm toolchain
-RUN apt-get update && apt-get install -y software-properties-common
-RUN apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 15CF4D18AF4F7421
-RUN apt-add-repository "deb http://apt.llvm.org/bookworm/ llvm-toolchain-bookworm-${LLVM_V} main"
-RUN apt-add-repository "deb-src http://apt.llvm.org/bookworm/ llvm-toolchain-bookworm-${LLVM_V} main"
+# Add the LLVM apt repo
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates gnupg lsb-release software-properties-common wget && \
+  wget https://apt.llvm.org/llvm.sh && \
+  chmod +x llvm.sh && \
+  ./llvm.sh ${LLVM_V}
 
-# Install deps for AFL++, Nyx, Bitcoin Core
-RUN apt-get update && apt-get install -y \
+# Install LLVM toolchain & deps for AFL++, Nyx, Bitcoin Core
+# vim & tmux are useful
+RUN apt-get update && apt install -y --no-install-recommends \
   ninja-build \
   libgtk-3-dev \
   pax-utils \
