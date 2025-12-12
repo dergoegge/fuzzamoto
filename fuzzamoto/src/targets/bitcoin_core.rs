@@ -1,16 +1,19 @@
 use crate::{
     connections::{Connection, ConnectionType, V1Transport},
-    targets::{HasTxOutSetInfo, Target},
+    targets::{
+        HasGetBestBlockHash, HasGetBlock, HasGetBlockCount, HasGetBlockHash, HasGetRawMempool,
+        HasGetTxOutSetInfo, Target, Txid,
+    },
 };
 
-use bitcoin::{Amount, hashes::Hash};
+use bitcoin::{Amount, Block, BlockHash};
 use corepc_node::{Conf, Node, P2P};
 use std::{
     net::{SocketAddrV4, TcpListener, TcpStream},
     str::FromStr,
 };
 
-use super::{ConnectableTarget, HasTipHash};
+use super::ConnectableTarget;
 
 pub struct BitcoinCoreTarget {
     pub node: Node,
@@ -226,13 +229,116 @@ impl ConnectableTarget for BitcoinCoreTarget {
     }
 }
 
-impl HasTipHash for BitcoinCoreTarget {
-    fn get_tip_hash(&self) -> Option<[u8; 32]> {
+impl HasGetBestBlockHash for BitcoinCoreTarget {
+    fn getbestblockhash(&self) -> Option<BlockHash> {
         match self.node.client.get_best_block_hash() {
-            Ok(result) => result
-                .block_hash()
-                .ok()
-                .map(|h| *h.as_raw_hash().as_byte_array()),
+            Ok(result) => result.block_hash().ok(),
+            Err(_) => None,
+        }
+    }
+}
+
+impl HasGetBlockCount for BitcoinCoreTarget {
+    fn getblockcount(&self) -> Option<u64> {
+        match self.node.client.get_block_count() {
+            Ok(result) => Some(result.0),
+            Err(_) => None,
+        }
+    }
+}
+
+impl HasGetBlock for BitcoinCoreTarget {
+    fn getblock(&self, hash: BlockHash) -> Option<Block> {
+        match self.node.client.get_block(hash) {
+            Ok(result) => Some(result),
+            Err(_) => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Mempool {
+    txid: Txid,
+    depends: Vec<Txid>,
+    spentby: Vec<Txid>,
+}
+
+impl Mempool {
+    pub fn txid(&self) -> &Txid {
+        &self.txid
+    }
+
+    pub fn depends(&self) -> &[Txid] {
+        &self.depends
+    }
+
+    pub fn spentby(&self) -> &[Txid] {
+        &self.spentby
+    }
+}
+
+impl HasGetRawMempool for BitcoinCoreTarget {
+    fn getrawmempool(&self) -> Result<Vec<Mempool>, String> {
+        let mut ret_vec = vec![];
+        let rawmempool = self
+            .node
+            .client
+            .call::<serde_json::Value>("getrawmempool", &[serde_json::Value::Bool(true)])
+            .map_err(|e| format!("Failed to request rawmempool {:?}", e))?;
+        let rawmempool = match rawmempool {
+            serde_json::Value::Object(obj) => obj,
+            _ => return Err("Failed to request txoutsetinfo".to_string()),
+        };
+
+        for (key, value) in rawmempool.iter() {
+            let txid = Txid::from_str(key).map_err(|e| format!("Failed to decode txid {:?}", e))?;
+
+            let mut mempool = Mempool {
+                txid,
+                depends: Vec::new(),
+                spentby: Vec::new(),
+            };
+
+            let depends = value
+                .get("depends")
+                .ok_or_else(|| format!("Failed to decode depends for txid: {}", txid))?
+                .as_array()
+                .ok_or_else(|| format!("Failed to decode depends for txid: {}", txid))?;
+            for item in depends {
+                match item {
+                    serde_json::Value::String(s) => {
+                        let depends_txid = Txid::from_str(s)
+                            .map_err(|_| format!("Failed to decode depends for txid: {}", txid))?;
+                        mempool.depends.push(depends_txid)
+                    }
+                    _ => return Err(format!("Failed to decode depends for txid: {}", txid)),
+                }
+            }
+            let spentby = value
+                .get("spentby")
+                .ok_or_else(|| format!("Failed to decode spentby for txid: {}", txid))?
+                .as_array()
+                .ok_or_else(|| format!("Failed to decode spentby for txid: {}", txid))?;
+            for item in spentby {
+                match item {
+                    serde_json::Value::String(s) => {
+                        let spentby_txid = Txid::from_str(s)
+                            .map_err(|_| format!("Failed to decode spentby for txid: {}", txid))?;
+                        mempool.spentby.push(spentby_txid)
+                    }
+                    _ => return Err(format!("Failed to decode spentby for txid: {}", txid)),
+                }
+            }
+            ret_vec.push(mempool);
+        }
+        Ok(ret_vec)
+    }
+}
+
+impl HasGetBlockHash for BitcoinCoreTarget {
+    fn getblockhash(&self, height: u64) -> Option<BlockHash> {
+        match self.node.client.get_block_hash(height) {
+            Ok(result) => result.block_hash().ok(),
             Err(_) => None,
         }
     }
@@ -254,8 +360,8 @@ impl TxOutSetInfo {
     }
 }
 
-impl HasTxOutSetInfo for BitcoinCoreTarget {
-    fn tx_out_set_info(&self) -> Result<TxOutSetInfo, String> {
+impl HasGetTxOutSetInfo for BitcoinCoreTarget {
+    fn gettxoutsetinfo(&self) -> Result<TxOutSetInfo, String> {
         let txoutsetinfo = self
             .node
             .client

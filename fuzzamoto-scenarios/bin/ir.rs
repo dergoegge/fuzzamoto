@@ -7,7 +7,7 @@ use fuzzamoto::{
     fuzzamoto_main,
     oracles::{CrashOracle, Oracle, OracleResult},
     scenarios::{Scenario, ScenarioInput, ScenarioResult, generic::GenericScenario},
-    targets::{BitcoinCoreTarget, ConnectableTarget, HasTipHash, HasTxOutSetInfo, Target},
+    targets::{BitcoinCoreTarget, ConnectableTarget, HasBlockChainRPC, Target},
 };
 
 #[cfg(feature = "nyx")]
@@ -121,7 +121,7 @@ impl<'a> ScenarioInput<'a> for TestCase {
 impl<TX, T> IrScenario<TX, T>
 where
     TX: Transport,
-    T: Target<TX> + HasTipHash + ConnectableTarget + HasTxOutSetInfo,
+    T: Target<TX> + ConnectableTarget + HasBlockChainRPC,
 {
     /// Build the IR program context
     fn build_program_context(inner: &GenericScenario<TX, T>) -> ProgramContext {
@@ -373,7 +373,7 @@ where
 impl<TX, T> Scenario<'_, TestCase> for IrScenario<TX, T>
 where
     TX: Transport,
-    T: Target<TX> + HasTipHash + ConnectableTarget + HasTxOutSetInfo,
+    T: Target<TX> + ConnectableTarget + HasBlockChainRPC,
 {
     fn new(args: &[String]) -> Result<Self, String> {
         let inner: GenericScenario<TX, T> = GenericScenario::new(args)?;
