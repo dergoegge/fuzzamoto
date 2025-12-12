@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Benchmark Run Report</title>
+  <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.29.1/plotly.min.js"></script>
+  <style>
+    body { font-family: sans-serif; margin: 16px; color: #222; }
+    .chart { width: 100%; max-width: 1100px; height: 420px; margin: 0 0 24px 0; }
+    #status { margin: 8px 0 16px; color: #444; }
+  </style>
+</head>
+<body>
+  <h1>Benchmark Run Report</h1>
+  <div id="status"></div>
+  <div id="coverage" class="chart"></div>
+  <div id="corpus" class="chart"></div>
+  <div id="edge_hist" class="chart"></div>
+  <div id="relcov" class="chart"></div>
+  <script src="../viewer/run.js"></script>
+</body>
+</html>
