@@ -1614,7 +1614,7 @@ impl Compiler {
         }
 
         coinbase_tx_var.tx.txos = txos;
-
+        coinbase_tx_var.tx.id = Txid::from_byte_array(coinbase_txid);
         self.append_variable(Header {
             prev: *block.header.prev_blockhash.as_byte_array(),
             merkle_root: *block.header.merkle_root.as_byte_array(),
