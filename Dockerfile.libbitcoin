@@ -1,0 +1,150 @@
+FROM debian:bookworm
+
+# ============================================================================
+# libbitcoin-server with AFL++ instrumentation
+# ============================================================================
+#
+# This Dockerfile builds libbitcoin-server (version3 branch) with AFL++
+# coverage instrumentation.
+#
+# Build:   docker build -f Dockerfile.libbitcoin -t fuzzamoto-libbitcoin .
+# Run:     docker run -it -v $(pwd):/fuzzamoto fuzzamoto-libbitcoin
+# Binary:  /opt/libbitcoin/bin/bs
+# ============================================================================
+
+ARG LLVM_V=19
+
+# ------ Install LLVM toolchain ------
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common \
+    gnupg \
+    ca-certificates \
+  && apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 15CF4D18AF4F7421 \
+  && apt-add-repository "deb http://apt.llvm.org/bookworm/ llvm-toolchain-bookworm-${LLVM_V} main" \
+  && rm -rf /var/lib/apt/lists/*
+
+# ------ Install build dependencies ------
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    # AFL++ build dependencies
+    build-essential \
+    ninja-build \
+    lld-${LLVM_V} \
+    llvm-${LLVM_V} \
+    llvm-${LLVM_V}-dev \
+    clang-${LLVM_V} \
+    # Download tools
+    curl \
+    wget \
+    git \
+    # libbitcoin build dependencies
+    libtool \
+    autotools-dev \
+    automake \
+    autoconf \
+    cmake \
+    pkg-config \
+    libssl-dev \
+    libzmq3-dev \
+    libicu-dev \
+  && rm -rf /var/lib/apt/lists/*
+
+# ------ Build AFL++ ------
+
+ENV LLVM_CONFIG=llvm-config-${LLVM_V}
+WORKDIR /
+RUN git clone --depth 1 https://github.com/AFLplusplus/AFLplusplus \
+  && cd AFLplusplus \
+  && make PERFORMANCE=1 -j$(nproc) \
+  && rm -rf .git
+
+# ------ Build Boost 1.76.0 with AFL++ instrumentation ------
+
+ARG LIBBITCOIN_PREFIX=/opt/libbitcoin
+ARG BOOST_VERSION=1_76_0
+
+WORKDIR /tmp
+
+# Download and extract Boost
+RUN wget -q https://archives.boost.io/release/1.76.0/source/boost_${BOOST_VERSION}.tar.bz2 \
+  && tar -xjf boost_${BOOST_VERSION}.tar.bz2 \
+  && rm boost_${BOOST_VERSION}.tar.bz2
+
+WORKDIR /tmp/boost_${BOOST_VERSION}
+
+# Create clang symlinks (Boost bootstrap needs unversioned names)
+RUN ln -s /usr/bin/clang-${LLVM_V} /usr/local/bin/clang \
+  && ln -s /usr/bin/clang++-${LLVM_V} /usr/local/bin/clang++
+
+# Bootstrap b2 and configure AFL++ as a clang toolset variant
+RUN ./bootstrap.sh --with-toolset=clang --prefix=${LIBBITCOIN_PREFIX} \
+  && echo 'using clang : afl : /AFLplusplus/afl-clang-fast++ ;' > ~/user-config.jam
+
+# Build only the Boost libraries required by libbitcoin version3
+# -Wno-enum-constexpr-conversion: Required for Clang 16+ with Boost.MPL
+RUN ./b2 \
+    toolset=clang-afl \
+    variant=release \
+    threading=multi \
+    link=static \
+    cxxflags="-std=c++17 -Wno-enum-constexpr-conversion" \
+    --with-chrono \
+    --with-date_time \
+    --with-filesystem \
+    --with-iostreams \
+    --with-locale \
+    --with-log \
+    --with-program_options \
+    --with-regex \
+    --with-system \
+    --with-thread \
+    --with-test \
+    -sICU_PATH=/usr \
+    -sNO_BZIP2=1 \
+    -sNO_ZSTD=1 \
+    -j$(nproc) \
+    -d0 \
+    install \
+  && rm -rf /tmp/boost_${BOOST_VERSION}
+
+# ------ Build libbitcoin-server with AFL++ instrumentation ------
+
+ENV CC=/AFLplusplus/afl-clang-fast
+ENV CXX=/AFLplusplus/afl-clang-fast++
+ENV CXXFLAGS="-Wno-enum-constexpr-conversion"
+ENV BOOST_ROOT=${LIBBITCOIN_PREFIX}
+
+# Clone version3 branch (stable, compatible with Boost 1.76)
+RUN git clone --depth 1 --branch version3 \
+    https://github.com/libbitcoin/libbitcoin-server.git /libbitcoin-server
+
+WORKDIR /libbitcoin-server
+
+# Build libbitcoin and all dependencies with AFL++ instrumentation
+# --build-zmq: Debian Bookworm has 4.3.4, libbitcoin requires >= 4.3.5
+ARG LIBBITCOIN_BUILD_DIR=/tmp/libbitcoin-build
+RUN ./install.sh \
+    --prefix=${LIBBITCOIN_PREFIX} \
+    --with-boost=${LIBBITCOIN_PREFIX} \
+    --build-secp256k1 \
+    --build-zmq \
+    --disable-shared \
+    --without-tests \
+    --with-icu \
+    --build-dir=${LIBBITCOIN_BUILD_DIR} \
+  && rm -rf ${LIBBITCOIN_BUILD_DIR}
+
+# Verify AFL++ instrumentation and binary functionality
+RUN nm ${LIBBITCOIN_PREFIX}/bin/bs | grep -q "__afl" \
+  && ${LIBBITCOIN_PREFIX}/bin/bs --help > /dev/null
+
+# ------ Runtime configuration ------
+
+ENV LIBBITCOIN_PATH=${LIBBITCOIN_PREFIX}/bin/bs
+ENV CC=clang-${LLVM_V}
+ENV CXX=clang++-${LLVM_V}
+
+RUN git config --global --add safe.directory /fuzzamoto
+
+WORKDIR /fuzzamoto
