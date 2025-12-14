@@ -1,5 +1,8 @@
 pub mod bitcoin_core;
+pub mod libbitcoin;
+
 pub use bitcoin_core::BitcoinCoreTarget;
+pub use libbitcoin::LibbitcoinTarget;
 
 use crate::{
     connections::{Connection, ConnectionType, Transport},
