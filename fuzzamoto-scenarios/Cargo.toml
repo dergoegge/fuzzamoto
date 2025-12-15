@@ -69,3 +69,7 @@ path = "bin/rpc_generic.rs"
 [[bin]]
 name = "scenario-ir"
 path = "bin/ir.rs"
+
+[[bin]]
+name = "scenario-libbitcoin-generic"
+path = "bin/libbitcoin_generic.rs"

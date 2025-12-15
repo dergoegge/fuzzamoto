@@ -1,4 +1,5 @@
 pub mod generic;
+pub mod libbitcoin_generic;
 
 /// `ScenarioInput` is a trait for scenario input types
 pub trait ScenarioInput<'a>: Sized {
