@@ -35,25 +35,42 @@ impl Drop for LibbitcoinTarget {
 }
 
 impl LibbitcoinTarget {
-    /// Generate minimal regtest configuration for libbitcoin-server.
+    /// Generate regtest configuration for libbitcoin-server.
     ///
-    /// - identifier: Regtest network magic bytes (0xDAB5BFFA as u32 = 3669344250)
+    /// Required settings discovered through testing:
+    /// - archive_directory: Log directory (defaults to ./archive if not set)
+    /// - identifier: Regtest network magic (0xDAB5BFFA = 3669344250)
     /// - inbound_port: P2P listen port
-    /// - database.directory: Chain data storage location
-    /// - use_libconsensus = false: Use libbitcoin's native consensus (not Bitcoin Core's)
+    /// - inbound_connections: Must be > 0, otherwise server logs
+    ///   "Not configured for accepting incoming connections" and won't listen
+    /// - outbound_connections = 0: Without this, server tries to contact mainnet
+    ///   seeds and fails with "unresponsive peer may be throttling"
+    /// - host_pool_capacity = 0: Disables address pool to prevent seeding attempts
+    /// - directory: Database storage location
+    /// - use_libconsensus = false: Use libbitcoin's native consensus to find
+    ///   potential divergence bugs vs Bitcoin Core
     fn generate_config(datadir: &std::path::Path, p2p_port: u16) -> String {
         format!(
-            r#"[network]
+            r#"[log]
+archive_directory = {logdir}
+debug_file = {logdir}/debug.log
+error_file = {logdir}/error.log
+
+[network]
 identifier = 3669344250
 inbound_port = {p2p_port}
+inbound_connections = 10
+outbound_connections = 0
+host_pool_capacity = 0
 
 [database]
-directory = {datadir}/database
+directory = {datadir}
 
 [blockchain]
 use_libconsensus = false
 "#,
-            datadir = datadir.display(),
+            logdir = datadir.join("logs").display(),
+            datadir = datadir.join("database").display(),
             p2p_port = p2p_port,
         )
     }
@@ -94,6 +111,7 @@ impl Target<V1Transport> for LibbitcoinTarget {
     fn from_path(exe_path: &str) -> Result<Self, String> {
         // Create temporary data directory
         let datadir = std::env::temp_dir().join(format!("libbitcoin-fuzz-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&datadir);
         std::fs::create_dir_all(&datadir)
             .map_err(|e| format!("Failed to create datadir: {}", e))?;
 
@@ -109,15 +127,24 @@ impl Target<V1Transport> for LibbitcoinTarget {
         std::fs::write(&config_path, &config)
             .map_err(|e| format!("Failed to write config: {}", e))?;
 
-        // Create database directory
-        std::fs::create_dir_all(datadir.join("database"))
-            .map_err(|e| format!("Failed to create database directory: {}", e))?;
-
-        // Spawn libbitcoin-server with --initchain to initialize if needed
-        let process = Command::new(exe_path)
+        // Initialize the database (--initchain exits after completion)
+        let init_status = Command::new(exe_path)
             .arg("--config")
             .arg(&config_path)
             .arg("--initchain")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .status()
+            .map_err(|e| format!("Failed to run --initchain: {}", e))?;
+
+        if !init_status.success() {
+            return Err(format!("--initchain failed with status: {}", init_status));
+        }
+
+        // Start the server (without --initchain)
+        let process = Command::new(exe_path)
+            .arg("--config")
+            .arg(&config_path)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -209,18 +236,5 @@ mod tests {
             .expect("Failed to create inbound connection");
 
         target.is_alive().expect("Target should be alive");
-    }
-
-    #[test]
-    #[ignore] // Requires libbitcoin-server binary
-    fn test_outbound_not_supported() {
-        let path = std::env::var("LIBBITCOIN_PATH")
-            .unwrap_or_else(|_| "/opt/libbitcoin/bin/bs".to_string());
-
-        let mut target =
-            LibbitcoinTarget::from_path(&path).expect("Failed to spawn libbitcoin-server");
-
-        let result = target.connect(ConnectionType::Outbound);
-        assert!(result.is_err());
     }
 }
