@@ -1,8 +1,7 @@
 use fuzzamoto::{
     fuzzamoto_main,
     scenarios::{
-        Scenario, ScenarioInput, ScenarioResult,
-        generic::TestCase,
+        Scenario, ScenarioInput, ScenarioResult, generic::TestCase,
         libbitcoin_generic::LibbitcoinGenericScenario,
     },
     targets::LibbitcoinTarget,

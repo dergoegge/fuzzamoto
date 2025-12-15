@@ -145,6 +145,22 @@ ENV LIBBITCOIN_PATH=${LIBBITCOIN_PREFIX}/bin/bs
 ENV CC=clang-${LLVM_V}
 ENV CXX=clang++-${LLVM_V}
 
+# Install Rust toolchain for building fuzzamoto
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+ENV PATH="/root/.cargo/bin:${PATH}"
+
 RUN git config --global --add safe.directory /fuzzamoto
 
 WORKDIR /fuzzamoto
+
+# ============================================================================
+# Usage:
+#   # Test libbitcoin-server starts correctly:
+#   /fuzzamoto/scripts/test-libbitcoin.sh
+#
+#   # Build and run fuzzamoto integration tests:
+#   cargo test --release --package fuzzamoto -- libbitcoin --ignored
+#
+#   # Build the libbitcoin scenario:
+#   cargo build --release --package fuzzamoto-scenarios --bin scenario-libbitcoin-generic
+# ============================================================================

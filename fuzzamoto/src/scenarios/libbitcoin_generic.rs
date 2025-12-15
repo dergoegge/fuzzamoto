@@ -1,7 +1,7 @@
 use crate::{
     connections::{Connection, ConnectionType, HandshakeOpts, Transport},
-    scenarios::{Scenario, ScenarioResult},
     scenarios::generic::{Action, TestCase},
+    scenarios::{Scenario, ScenarioResult},
     targets::Target,
     test_utils,
 };
@@ -86,7 +86,11 @@ impl<'a, TX: Transport, T: Target<TX>> Scenario<'a, TestCase> for LibbitcoinGene
                 Action::Connect { .. } => {
                     // Dynamic connections not supported for libbitcoin
                 }
-                Action::Message { from, command, data } => {
+                Action::Message {
+                    from,
+                    command,
+                    data,
+                } => {
                     if self.connections.is_empty() {
                         continue;
                     }
