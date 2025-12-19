@@ -145,7 +145,7 @@ RUN for scenario in /fuzzamoto/target/release/scenario-*; do \
       /fuzzamoto/target/release/fuzzamoto-cli init \
         --sharedir $SCENARIO_NYX_DIR \
         --crash-handler ./fuzzamoto/libnyx_crash_handler.so \
-        --bitcoind bitcoin/build_fuzz/bin/bitcoind \
+        --bitcoind $BITCOIND_PATH \
         --scenario $scenario \
         --nyx-dir /AFLplusplus/nyx_mode \
         --rpc-path ./fuzzamoto/fuzzamoto-scenarios/rpcs.txt; \
