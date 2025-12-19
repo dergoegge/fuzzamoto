@@ -70,7 +70,7 @@ ENV CXX=$PWD/AFLplusplus/afl-clang-fast++
 
 ENV SOURCES_PATH=/tmp/bitcoin-depends
 RUN make -C bitcoin/depends NO_QT=1 NO_ZMQ=1 NO_USDT=1 download-linux SOURCES_PATH=$SOURCES_PATH
-# Keep extracted source 
+# Keep extracted source
 RUN sed -i --regexp-extended '/.*rm -rf .*extract_dir.*/d' ./bitcoin/depends/funcs.mk && \
     make -C ./bitcoin/depends DEBUG=1 NO_QT=1 NO_ZMQ=1 NO_USDT=1 \
       SOURCES_PATH=$SOURCES_PATH \
@@ -117,6 +117,7 @@ COPY ./fuzzamoto-libafl/src/ src/
 WORKDIR /fuzzamoto/fuzzamoto-scenarios
 COPY ./fuzzamoto-scenarios/Cargo.toml .
 COPY ./fuzzamoto-scenarios/bin/ bin/
+COPY ./fuzzamoto-scenarios/rpcs.txt .
 
 WORKDIR /fuzzamoto
 COPY ./Cargo.toml .
@@ -146,6 +147,7 @@ RUN for scenario in /fuzzamoto/target/release/scenario-*; do \
         --crash-handler ./fuzzamoto/libnyx_crash_handler.so \
         --bitcoind bitcoin/build_fuzz/bin/bitcoind \
         --scenario $scenario \
-        --nyx-dir /AFLplusplus/nyx_mode; \
+        --nyx-dir /AFLplusplus/nyx_mode \
+        --rpc-path ./fuzzamoto/fuzzamoto-scenarios/rpcs.txt; \
       fi \
     done

@@ -50,6 +50,7 @@ pub fn create_nyx_script(
     crash_handler_name: &str,
     scenario_name: &str,
     secondary_bitcoind: Option<&str>,
+    rpc_path: Option<&str>,
 ) -> Result<()> {
     let mut script = Vec::new();
 
@@ -64,6 +65,10 @@ pub fn create_nyx_script(
     // Add dependencies
     for dep in all_deps {
         script.push(format!("./hget {} {}", dep, dep));
+    }
+
+    if let Some(rpc_path) = rpc_path {
+        script.push(format!("./hget {} {}", rpc_path, rpc_path));
     }
 
     // Make executables
@@ -107,8 +112,9 @@ pub fn create_nyx_script(
 
     // Run the scenario
     script.push(format!(
-        "RUST_LOG=debug LD_LIBRARY_PATH=/tmp LD_BIND_NOW=1 ./{} ./bitcoind_proxy {} > log.txt 2>&1",
+        "RUST_LOG=debug LD_LIBRARY_PATH=/tmp LD_BIND_NOW=1 ./{} ./bitcoind_proxy {} {} > log.txt 2>&1",
         scenario_name,
+        rpc_path.unwrap_or(""),
         secondary_bitcoind.unwrap_or("")
     ));
 
