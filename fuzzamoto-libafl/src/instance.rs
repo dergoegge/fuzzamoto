@@ -45,7 +45,7 @@ use crate::{
     mutators::{IrGenerator, IrMutator, IrSpliceMutator, LibAflByteMutator},
     options::FuzzerOptions,
     schedulers::SupportedSchedulers,
-    stages::{IrMinimizerStage, ProbingStage, VerifyTimeoutsStage},
+    stages::{IrMinimizerStage, ProbingStage, StabilityCheckStage, VerifyTimeoutsStage},
 };
 
 #[cfg(feature = "bench")]
@@ -118,7 +118,7 @@ where
         let stdout_observer = StdOutObserver::new(Cow::Borrowed("hprintf_output")).unwrap();
 
         let map_feedback = MaxMapFeedback::new(&trace_observer);
-
+        let map_feedback_name = map_feedback.name().to_string();
         let trace_handle = map_feedback.observer_handle().clone();
 
         #[cfg(feature = "bench")]
@@ -133,6 +133,7 @@ where
         #[cfg(not(feature = "bench"))]
         let bench_stats_stage = NopStage::new();
 
+        let map_observer_handle = trace_observer.handle();
         let stdout_observer_handle = stdout_observer.handle();
 
         // Feedback to rate the interestingness of an input
@@ -379,7 +380,7 @@ where
         let continue_minimizing = RefCell::new(1u64);
 
         let probing = ProbingStage::new(&stdout_observer_handle);
-
+        let stability = StabilityCheckStage::new(&map_observer_handle, &map_feedback_name, 8);
         let mut stages = tuple_list!(
             ClosureStage::new(|_a: &mut _, _b: &mut _, _c: &mut _, _d: &mut _| {
                 // Always try minimizing at least for one pass
@@ -415,6 +416,7 @@ where
                     ),
                 )
             ),
+            stability,
             probing,
             IfStage::new(
                 |_, _, _, _| Ok(self.options.minimize_input.is_none()),
