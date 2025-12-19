@@ -66,7 +66,7 @@ pub type ConnectionId = usize;
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 pub struct CompiledMetadata {
     // Map from blockhash to (block variable index, list of transaction variable indices)
-    block_tx_var_map: HashMap<bitcoin::BlockHash, (usize, Vec<usize>)>,
+    block_tx_var_map: HashMap<bitcoin::BlockHash, (usize, usize, Vec<usize>)>,
     // Map from connection ids to connection variable indices.
     connection_map: HashMap<ConnectionId, VariableIndex>,
     // List of instruction indices that correspond to actions in the compiled program (does not include probe operation)
@@ -89,10 +89,13 @@ impl CompiledMetadata {
     }
 
     // Get the block variable index and list of transaction variable indices for a given block hash
-    pub fn block_variables(&self, block_hash: &bitcoin::BlockHash) -> Option<(usize, &[usize])> {
+    pub fn block_variables(
+        &self,
+        block_hash: &bitcoin::BlockHash,
+    ) -> Option<(usize, usize, &[usize])> {
         self.block_tx_var_map
             .get(block_hash)
-            .map(|(block_var, tx_vars)| (*block_var, tx_vars.as_slice()))
+            .map(|(header_var, block_var, tx_vars)| (*header_var, *block_var, tx_vars.as_slice()))
     }
 
     // Get the list of instruction indices that correspond to actions in the compiled program
@@ -1627,6 +1630,7 @@ impl Compiler {
 
         coinbase_tx_var.tx.txos = txos;
         coinbase_tx_var.tx.id = Txid::from_byte_array(coinbase_txid);
+        let header_var_index = self.variables.len();
         self.append_variable(Header {
             prev: *block.header.prev_blockhash.as_byte_array(),
             merkle_root: *block.header.merkle_root.as_byte_array(),
@@ -1645,7 +1649,11 @@ impl Compiler {
             .metadata
             .block_tx_var_map
             .entry(block_hash)
-            .or_insert((block_var_index, block_transactions_var.var_indices.clone()));
+            .or_insert((
+                header_var_index,
+                block_var_index,
+                block_transactions_var.var_indices.clone(),
+            ));
 
         self.append_variable(coinbase_tx_var.tx);
 

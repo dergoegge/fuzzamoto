@@ -23,7 +23,7 @@ use fuzzamoto::oracles::{NetSplitContext, NetSplitOracle};
 use fuzzamoto::oracles::{ConsensusContext, ConsensusOracle};
 
 use fuzzamoto_ir::{
-    ProbeResult, ProbeResults, Program, ProgramContext,
+    ProbeResult, ProbeResults, Program, ProgramContext, RecentBlock,
     compiler::{CompiledAction, CompiledMetadata, CompiledProgram, Compiler},
 };
 
@@ -76,7 +76,8 @@ fn probe_result_mapper(
                 };
             };
 
-            let Some((block_var, tx_vars)) = metadata.block_variables(&request.block_hash) else {
+            let Some((_, block_var, tx_vars)) = metadata.block_variables(&request.block_hash)
+            else {
                 return ProbeResult::Failure {
                     command: s.to_string(),
                     reason: format!("getblocktxn: block hash is not registered in the metadata"),
@@ -370,6 +371,36 @@ where
     }
 }
 
+const NUM_RECENT_BLOCKS: u64 = 10;
+
+pub fn probe_recent_block_hashes<T: HasBlockChainInterface>(
+    target: &T,
+    meta: &CompiledMetadata,
+) -> Option<ProbeResult> {
+    // get current height
+    let mut hashes = Vec::new();
+    let (mut hash, height) = target.get_tip_info()?;
+    for back in 0..NUM_RECENT_BLOCKS {
+        let new_height = height - back;
+        hashes.push((new_height, hash));
+        let block = target.get_block(hash)?;
+        hash = block.header.prev_blockhash;
+    }
+
+    let mut result = Vec::new();
+    for (height, hash) in &hashes {
+        if let Some((header, _, _)) = meta.block_variables(&hash)
+            && let Some(inst) = meta.variable_indices().get(header)
+        {
+            result.push(RecentBlock {
+                height: *height,
+                defining_block: (header, *inst),
+            })
+        }
+    }
+    return Some(ProbeResult::RecentBlockes { result: result });
+}
+
 impl<TX, T> Scenario<'_, TestCase> for IrScenario<TX, T>
 where
     TX: Transport,
@@ -399,8 +430,15 @@ where
     }
 
     fn run(&mut self, testcase: TestCase) -> ScenarioResult {
+        let metadata = testcase.program.metadata.clone();
         self.process_actions(testcase.program);
         self.ping_connections();
+
+        if self.recording_received_messages {
+            if let Some(ret) = probe_recent_block_hashes(&self.inner.target, &metadata) {
+                self.probe_results.push(ret);
+            }
+        }
         self.print_received();
         self.evaluate_oracles()
     }

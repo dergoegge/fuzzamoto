@@ -212,6 +212,15 @@ impl Program {
         rng: &mut R,
         context: InstructionContext,
     ) -> Option<usize> {
+        self.get_random_instruction_index_from(rng, context, 0)
+    }
+
+    pub fn get_random_instruction_index_from<R: RngCore>(
+        &self,
+        rng: &mut R,
+        context: InstructionContext,
+        from: usize,
+    ) -> Option<usize> {
         let mut scope_counter = 0;
         let mut scopes = vec![Scope {
             begin: None,
@@ -241,7 +250,7 @@ impl Program {
             }
         }
 
-        contexts.iter().choose(rng).copied()
+        contexts.into_iter().filter(|i| *i >= from).choose(rng)
     }
 }
 
@@ -335,6 +344,38 @@ pub enum ProbeResult {
         /// The reason for why it failed to decode
         reason: String,
     },
+    RecentBlockes {
+        result: Vec<RecentBlock>,
+    },
 }
 
 pub type ProbeResults = Vec<ProbeResult>;
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RecentBlock {
+    /// height of this block
+    pub height: u64,
+    /// Variable index of this header if it is defined in the testcase
+    pub defining_block: (usize, usize),
+}
+
+impl PartialEq for RecentBlock {
+    fn eq(&self, other: &Self) -> bool {
+        self.height == other.height
+    }
+}
+
+impl Eq for RecentBlock {}
+
+// Ordering based only on height
+impl PartialOrd for RecentBlock {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.height.cmp(&other.height))
+    }
+}
+
+impl Ord for RecentBlock {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.height.cmp(&other.height)
+    }
+}
