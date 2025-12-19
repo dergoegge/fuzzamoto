@@ -78,6 +78,15 @@ where
                     txvec.add_block_tx_request(get_block_txn.clone());
                 }
             }
+            ProbeResult::Mempool { txo_entry } => {
+                let current = *state.corpus().current();
+                if let Some(cur) = current
+                    && let Ok(meta) = state.metadata_mut::<RuntimeMetadata>()
+                {
+                    let txvec = meta.metadatas.entry(cur).or_default();
+                    txvec.add_txo_entry(txo_entry.clone());
+                }
+            }
             ProbeResult::Failure { command, reason } => {
                 log::info!(
                     "Command {:?} couln't be parsed; reason: {:?}",
