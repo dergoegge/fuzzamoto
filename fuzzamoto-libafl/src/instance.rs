@@ -5,9 +5,10 @@ use fuzzamoto_ir::{
     BlockGenerator, BlockTxnGenerator, BloomFilterAddGenerator, BloomFilterClearGenerator,
     BloomFilterLoadGenerator, CombineMutator, CompactBlockGenerator, CompactFilterQueryGenerator,
     GetAddrGenerator, GetDataGenerator, HeaderGenerator, InputMutator, InventoryGenerator,
-    LargeTxGenerator, LongChainGenerator, OneParentOneChildGenerator, OperationMutator, Program,
-    SendBlockGenerator, SendMessageGenerator, SingleTxGenerator, TxoGenerator, WitnessGenerator,
-    cutting::CuttingMinimizer, instr_block::InstrBlockMinimizer, nopping::NoppingMinimizer,
+    LargeTxGenerator, LongChainGenerator, OneParentOneChildGenerator, OperationMutator,
+    PredicateTxGenerator, Program, SendBlockGenerator, SendMessageGenerator, SingleTxGenerator,
+    TxoGenerator, WitnessGenerator, cutting::CuttingMinimizer, instr_block::InstrBlockMinimizer,
+    nopping::NoppingMinimizer,
 };
 
 use libafl::{
@@ -273,6 +274,10 @@ where
             (
                 1000.0,
                 IrMutator::new(OperationMutator::new(LibAflByteMutator::new()), rng.clone())
+            ),
+            (
+                100.0,
+                IrGenerator::new(PredicateTxGenerator::any(), rng.clone())
             ),
             (
                 100.0,

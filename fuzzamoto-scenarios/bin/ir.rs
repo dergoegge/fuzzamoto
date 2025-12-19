@@ -23,7 +23,7 @@ use fuzzamoto::oracles::{NetSplitContext, NetSplitOracle};
 use fuzzamoto::oracles::{ConsensusContext, ConsensusOracle};
 
 use fuzzamoto_ir::{
-    ProbeResult, ProbeResults, Program, ProgramContext,
+    MempoolTxo, ProbeResult, ProbeResults, Program, ProgramContext,
     compiler::{CompiledAction, CompiledMetadata, CompiledProgram, Compiler},
 };
 
@@ -320,6 +320,34 @@ where
         }
     }
 
+    fn print_mempool(&mut self, meta: &CompiledMetadata) {
+        let query = self.inner.target.get_mempool_entries();
+        if let Ok(mempool) = query {
+            let mut ret = Vec::new();
+            for tx in mempool {
+                let txid = tx.txid();
+                let definition = if let Some(txo) = meta.txo_variables(*txid)
+                    && let Some(inst) = meta.variable_indices().get(*txo)
+                {
+                    (*txo, *inst)
+                } else {
+                    continue;
+                };
+
+                let txo_entry = MempoolTxo {
+                    txid: *txid,
+                    definition: definition,
+                    spentby: tx.spentby().to_vec(),
+                    depends: tx.depends().to_vec(),
+                };
+
+                ret.push(txo_entry);
+            }
+            self.probe_results
+                .push(ProbeResult::Mempool { txo_entry: ret });
+        }
+    }
+
     fn evaluate_oracles(&mut self) -> ScenarioResult {
         let crash_oracle = CrashOracle::<TX>::default();
         if let OracleResult::Fail(e) = crash_oracle.evaluate(&self.inner.target) {
@@ -399,8 +427,14 @@ where
     }
 
     fn run(&mut self, testcase: TestCase) -> ScenarioResult {
+        let meta = testcase.program.metadata.clone();
         self.process_actions(testcase.program);
         self.ping_connections();
+
+        if self.recording_received_messages {
+            self.print_mempool(&meta);
+        }
+
         self.print_received();
         self.evaluate_oracles()
     }

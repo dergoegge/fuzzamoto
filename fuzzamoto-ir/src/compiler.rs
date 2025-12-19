@@ -67,6 +67,8 @@ pub type ConnectionId = usize;
 pub struct CompiledMetadata {
     // Map from blockhash to (block variable index, list of transaction variable indices)
     block_tx_var_map: HashMap<bitcoin::BlockHash, (usize, Vec<usize>)>,
+    // Map from txid to tx variable index
+    txo_var_map: HashMap<Txid, VariableIndex>,
     // Map from connection ids to connection variable indices.
     connection_map: HashMap<ConnectionId, VariableIndex>,
     // List of instruction indices that correspond to actions in the compiled program (does not include probe operation)
@@ -82,6 +84,7 @@ impl CompiledMetadata {
         Self {
             block_tx_var_map: HashMap::new(),
             connection_map: HashMap::new(),
+            txo_var_map: HashMap::new(),
             action_indices: Vec::new(),
             variable_indices: Vec::new(),
             instructions: 0,
@@ -93,6 +96,15 @@ impl CompiledMetadata {
         self.block_tx_var_map
             .get(block_hash)
             .map(|(block_var, tx_vars)| (*block_var, tx_vars.as_slice()))
+    }
+
+    pub fn txo_variables(&self, txid: Txid) -> Option<&VariableIndex> {
+        self.txo_var_map.get(&txid)
+    }
+
+    // Get the list of instruction indices that correspond to variables in the compiled program
+    pub fn variable_indices(&self) -> &[InstructionIndex] {
+        &self.variable_indices
     }
 
     // Get the list of instruction indices that correspond to actions in the compiled program
@@ -962,12 +974,20 @@ impl Compiler {
             }
             Operation::TakeTxo | Operation::TakeCoinbaseTxo => {
                 let tx_var = self.get_input_mut::<Tx>(&instruction.inputs, 0)?;
+                let txid = tx_var.id;
                 let num_txos = tx_var.txos.len();
                 let mut txo = Txo::new();
                 if num_txos != 0 {
                     txo = tx_var.txos[tx_var.output_selector % num_txos].clone();
                     tx_var.output_selector += 1;
                 }
+                let txo_index = self.variables.len();
+
+                self.output
+                    .metadata
+                    .txo_var_map
+                    .entry(txid)
+                    .or_insert(txo_index);
 
                 self.append_variable(txo);
             }

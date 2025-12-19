@@ -20,10 +20,10 @@ pub use minimizers::*;
 pub use mutators::*;
 pub use operation::*;
 
+use bitcoin::Txid;
 use rand::{RngCore, seq::IteratorRandom};
-pub use variable::*;
-
 use std::{collections::HashMap, fmt, hash::Hash};
+pub use variable::*;
 
 /// Program represent a sequence of operations to perform on target nodes.
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Hash)]
@@ -212,6 +212,15 @@ impl Program {
         rng: &mut R,
         context: InstructionContext,
     ) -> Option<usize> {
+        self.get_random_instruction_index_from(rng, context, 0)
+    }
+
+    pub fn get_random_instruction_index_from<R: RngCore>(
+        &self,
+        rng: &mut R,
+        context: InstructionContext,
+        from: usize,
+    ) -> Option<usize> {
         let mut scope_counter = 0;
         let mut scopes = vec![Scope {
             begin: None,
@@ -241,7 +250,7 @@ impl Program {
             }
         }
 
-        contexts.iter().choose(rng).copied()
+        contexts.into_iter().filter(|i| *i >= from).choose(rng)
     }
 }
 
@@ -324,10 +333,38 @@ pub struct GetBlockTxn {
     pub tx_indices_variables: Vec<usize>,
 }
 
+/// The metadata holds the txid of transactions in mempool which is already spent by another tx in the mempool
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct MempoolTxo {
+    pub txid: Txid,
+    pub definition: (usize, usize),
+    pub spentby: Vec<Txid>,
+    pub depends: Vec<Txid>,
+}
+
+/// The metadata holds the `MempoolTxo` list and the next txo used to mutate.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TxoMetadata {
+    pub txo_entry: Vec<MempoolTxo>,
+    pub choice: Option<usize>,
+}
+
+impl Default for TxoMetadata {
+    fn default() -> Self {
+        Self {
+            txo_entry: Vec::new(),
+            choice: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum ProbeResult {
     GetBlockTxn {
         get_block_txn: GetBlockTxn,
+    },
+    Mempool {
+        txo_entry: Vec<MempoolTxo>,
     },
     Failure {
         /// The command that failed to be decoded
