@@ -1,6 +1,6 @@
 use bitcoin::consensus::encode::{Encodable, ReadExt};
 use bitcoin::p2p::{ServiceFlags, address::Address, message_network::VersionMessage};
-use std::io::{Read, Write};
+use std::io::{BufReader, BufWriter, Read, Write};
 
 use std::net;
 
@@ -115,6 +115,154 @@ impl Transport for V1Transport {
         self.socket
             .local_addr()
             .map_err(|e| format!("Failed to get local address: {}", e))
+    }
+}
+
+pub struct V2Transport {
+    socket: net::TcpStream,
+    proto: bip324::io::Protocol<BufReader<net::TcpStream>, BufWriter<net::TcpStream>>,
+}
+
+impl V2Transport {
+    /// Create a new V2Transport by performing the BIP-324 handshake.
+    ///
+    /// # Arguments
+    ///
+    /// * `socket` - The TCP stream to use for the connection
+    /// * `role` - Whether we are the initiator or responder of the handshake
+    pub fn new(socket: net::TcpStream, role: bip324::Role) -> Result<Self, String> {
+        let reader = BufReader::new(
+            socket
+                .try_clone()
+                .map_err(|e| format!("Failed to clone socket for reader: {e}"))?,
+        );
+        let writer = BufWriter::new(
+            socket
+                .try_clone()
+                .map_err(|e| format!("Failed to clone socket for writer: {e}"))?,
+        );
+
+        let proto = bip324::io::Protocol::new(
+            bip324::Network::Regtest,
+            role,
+            None, // no garbage
+            None, // no decoys
+            reader,
+            writer,
+        )
+        .map_err(|e| format!("BIP-324 handshake failed: {e}"))?;
+
+        Ok(Self { socket, proto })
+    }
+
+    /// Convert BIP-324 short command ID to command string.
+    /// See: https://github.com/bitcoin/bips/blob/master/bip-0324.mediawiki#user-content-v2_Bitcoin_P2P_message_structure
+    fn short_command_id_to_string(id: u8) -> Option<String> {
+        let cmd = match id {
+            1 => "addr",
+            2 => "block",
+            3 => "blocktxn",
+            4 => "cmpctblock",
+            5 => "feefilter",
+            6 => "filteradd",
+            7 => "filterclear",
+            8 => "filterload",
+            9 => "getblocks",
+            10 => "getblocktxn",
+            11 => "getdata",
+            12 => "getheaders",
+            13 => "headers",
+            14 => "inv",
+            15 => "mempool",
+            16 => "merkleblock",
+            17 => "notfound",
+            18 => "ping",
+            19 => "pong",
+            20 => "sendcmpct",
+            21 => "tx",
+            22 => "getcfilters",
+            23 => "cfilter",
+            24 => "getcfheaders",
+            25 => "cfheaders",
+            26 => "getcfcheckpt",
+            27 => "cfcheckpt",
+            28 => "addrv2",
+            _ => return None,
+        };
+        Some(cmd.to_string())
+    }
+}
+
+impl Transport for V2Transport {
+    fn send(&mut self, message: &(String, Vec<u8>)) -> Result<(), String> {
+        log::debug!(
+            "send {:?} message (len={} from={:?})",
+            message.0,
+            message.1.len(),
+            self.socket.local_addr().unwrap(),
+        );
+        // Long format: 0x00 followed by 12-byte ASCII command, then payload
+        let mut command_bytes = [0u8; 13];
+        command_bytes[1..1 + message.0.len()].copy_from_slice(message.0.as_bytes());
+
+        let mut payload = Vec::with_capacity(13 + message.1.len());
+        payload.extend_from_slice(&command_bytes);
+        payload.extend_from_slice(&message.1);
+
+        self.proto
+            .write(&bip324::io::Payload::genuine(payload))
+            .map_err(|e| format!("bip324 write failed: {e}"))
+    }
+
+    fn receive(&mut self) -> Result<(String, Vec<u8>), String> {
+        loop {
+            let packet = self
+                .proto
+                .read()
+                .map_err(|e| format!("bip324 read failed: {e}"))?;
+
+            // Skip decoy packets
+            if packet.packet_type() == bip324::PacketType::Decoy {
+                continue;
+            }
+
+            let contents = packet.contents();
+            if contents.is_empty() {
+                return Err("Empty packet contents".to_string());
+            }
+
+            let (command, payload) = if contents[0] == 0x00 {
+                // Long format: 0x00 followed by 12-byte ASCII command, then payload
+                if contents.len() < 13 {
+                    return Err("Packet too short for long command format".to_string());
+                }
+                let cmd = String::from_utf8_lossy(&contents[1..13])
+                    .trim_matches(char::from(0))
+                    .to_string();
+                (cmd, contents[13..].to_vec())
+            } else {
+                // Short format: single byte command ID, then payload
+                // Convert to long command string
+                let cmd = V2Transport::short_command_id_to_string(contents[0])
+                    .ok_or_else(|| format!("Unknown short command ID: {}", contents[0]))?;
+                (cmd, contents[1..].to_vec())
+            };
+
+            log::debug!(
+                "received {:?} message (len={} on={:?})",
+                command,
+                payload.len(),
+                self.socket.local_addr().unwrap(),
+            );
+
+            return Ok((command, payload));
+        }
+    }
+
+    fn local_addr(&self) -> Result<net::SocketAddr, String> {
+        self.socket
+            .local_addr()
+            .map_err(|e| format!("local_addr: {e}"))
     }
 }
 

@@ -7,7 +7,13 @@ use fuzzamoto::{
     targets::BitcoinCoreTarget,
 };
 
+// Transport type alias based on feature flag
+#[cfg(not(feature = "v2transport"))]
+type ScenarioTransport = fuzzamoto::connections::V1Transport;
+#[cfg(feature = "v2transport")]
+type ScenarioTransport = fuzzamoto::connections::V2Transport;
+
 fuzzamoto_main!(
-    GenericScenario::<fuzzamoto::connections::V1Transport, BitcoinCoreTarget>,
+    GenericScenario::<ScenarioTransport, BitcoinCoreTarget>,
     TestCase
 );

@@ -1,6 +1,8 @@
 use crate::{
-    connections::{Connection, ConnectionType, V1Transport},
-    targets::{HasGetBlock, HasGetRawMempoolEntries, HasTipInfo, HasTxOutSetInfo, Target, Txid},
+    connections::{Connection, ConnectionType, V1Transport, V2Transport},
+    targets::{
+        HasGetBlock, HasGetRawMempoolEntries, HasTipInfo, HasTxOutSetInfo, Target, TargetNode, Txid,
+    },
 };
 
 use bitcoin::{Amount, Block, BlockHash};
@@ -39,10 +41,8 @@ impl BitcoinCoreTarget {
 
         Ok((listener, port))
     }
-}
 
-impl Target<V1Transport> for BitcoinCoreTarget {
-    fn from_path(exe_path: &str) -> Result<Self, String> {
+    fn base_config() -> Conf<'static> {
         let mut config = Conf::default();
         config.tmpdir = None;
         config.staticdir = None;
@@ -74,6 +74,14 @@ impl Target<V1Transport> for BitcoinCoreTarget {
             "-peertimeout=999999999",
             "-noconnect",
         ]);
+        config
+    }
+}
+
+/// Transport-independent implementation for BitcoinCoreTarget
+impl TargetNode for BitcoinCoreTarget {
+    fn from_path(exe_path: &str) -> Result<Self, String> {
+        let config = Self::base_config();
 
         let node = Node::with_conf(exe_path, &config)
             .map_err(|e| format!("Failed to start node: {:?}", e))?;
@@ -85,6 +93,45 @@ impl Target<V1Transport> for BitcoinCoreTarget {
         })
     }
 
+    fn set_mocktime(&mut self, time: u64) -> Result<(), String> {
+        let client = &self.node.client;
+
+        if self.time != u64::MAX && time > self.time {
+            // Mock the scheduler forward if we're advancing in time
+            let delta = (time - self.time).min(3600);
+            let _ = client.call::<()>("mockscheduler", &[delta.into()]);
+        }
+        self.time = time;
+        client
+            .call::<()>("setmocktime", &[time.into()])
+            .map_err(|e| format!("Failed to set mocktime: {:?}", e))
+    }
+
+    fn is_alive(&self) -> Result<(), String> {
+        // Call the echo rpc to check if the node is still alive
+        let client = &self.node.client;
+        client
+            .call::<serde_json::Value>(
+                "echo",
+                &[r#"Ground Control to Major Tom
+Your circuit's dead, there's something wrong
+Can you hear me, Major Tom?
+Can you hear me, Major Tom?
+Can you hear me, Major Tom?
+Can you-"#
+                    .into()],
+            )
+            .map_err(|e| format!("Failed to check if node is alive: {:?}", e))?;
+
+        client
+            .call::<()>("syncwithvalidationinterfacequeue", &[])
+            .map_err(|e| format!("Failed to sync with validation interface queue: {:?}", e))?;
+
+        Ok(())
+    }
+}
+
+impl Target<V1Transport> for BitcoinCoreTarget {
     fn connect(
         &mut self,
         connection_type: ConnectionType,
@@ -138,41 +185,85 @@ impl Target<V1Transport> for BitcoinCoreTarget {
         }
     }
 
-    fn set_mocktime(&mut self, time: u64) -> Result<(), String> {
-        let client = &self.node.client;
-
-        if self.time != u64::MAX && time > self.time {
-            // Mock the scheduler forward if we're advancing in time
-            let delta = (time - self.time).min(3600);
-            let _ = client.call::<()>("mockscheduler", &[delta.into()]);
+    fn connect_to<O: ConnectableTarget>(&mut self, other: &O) -> Result<(), String> {
+        if let Some(addr) = other.get_addr() {
+            self.node
+                .client
+                .call::<serde_json::Value>(
+                    "addconnection",
+                    &[
+                        format!("{:?}", addr).into(),
+                        "outbound-full-relay".into(),
+                        false.into(), // no v2
+                    ],
+                )
+                .map_err(|e| format!("Failed to initiate outbound connection: {:?}", e))?;
+        } else {
+            return Err("Other node does not have a valid address".to_string());
         }
-        self.time = time;
-        client
-            .call::<()>("setmocktime", &[time.into()])
-            .map_err(|e| format!("Failed to set mocktime: {:?}", e))
-    }
-
-    fn is_alive(&self) -> Result<(), String> {
-        // Call the echo rpc to check if the node is still alive
-        let client = &self.node.client;
-        client
-            .call::<serde_json::Value>(
-                "echo",
-                &[r#"Ground Control to Major Tom
-Your circuit's dead, there's something wrong
-Can you hear me, Major Tom?
-Can you hear me, Major Tom?
-Can you hear me, Major Tom?
-Can you-"#
-                    .into()],
-            )
-            .map_err(|e| format!("Failed to check if node is alive: {:?}", e))?;
-
-        client
-            .call::<()>("syncwithvalidationinterfacequeue", &[])
-            .map_err(|e| format!("Failed to sync with validation interface queue: {:?}", e))?;
 
         Ok(())
+    }
+}
+
+impl Target<V2Transport> for BitcoinCoreTarget {
+    fn connect(
+        &mut self,
+        connection_type: ConnectionType,
+    ) -> Result<Connection<V2Transport>, String> {
+        match connection_type {
+            ConnectionType::Inbound => {
+                // For inbound, connect directly to the P2P port
+                let p2p_socket = self
+                    .node
+                    .params
+                    .p2p_socket
+                    .ok_or_else(|| "P2P socket address not available".to_string())?;
+                let socket = TcpStream::connect(p2p_socket)
+                    .map_err(|e| format!("Failed to connect to P2P port: {}", e))?;
+                // Disable Nagle's algorithm, since most of the time we're sending small messages and
+                // we want to reduce latency when fuzzing.
+                socket
+                    .set_nodelay(true)
+                    .expect("Failed to set nodelay on inbound socket");
+
+                Ok(Connection::new(
+                    connection_type,
+                    V2Transport::new(socket, bip324::Role::Initiator)?,
+                ))
+            }
+            ConnectionType::Outbound => {
+                let (listener, port) = Self::create_listener()?;
+                self.listeners.push(listener);
+                let listener = self.listeners.last().unwrap();
+
+                // Tell Bitcoin Core to connect to our listener
+                let client = &self.node.client;
+                client
+                    .call::<serde_json::Value>(
+                        "addconnection",
+                        &[
+                            format!("127.0.0.1:{}", port).into(),
+                            "outbound-full-relay".into(),
+                            true.into(), // v2
+                        ],
+                    )
+                    .map_err(|e| format!("Failed to initiate outbound connection: {:?}", e))?;
+
+                // Wait for Bitcoin Core to connect
+                let (socket, _addr) = listener
+                    .accept()
+                    .map_err(|e| format!("Failed to accept connection: {}", e))?;
+                socket
+                    .set_nodelay(true)
+                    .expect("Failed to set nodelay on outbound socket");
+
+                Ok(Connection::new(
+                    connection_type,
+                    V2Transport::new(socket, bip324::Role::Responder)?,
+                ))
+            }
+        }
     }
 
     fn connect_to<O: ConnectableTarget>(&mut self, other: &O) -> Result<(), String> {
@@ -184,7 +275,7 @@ Can you-"#
                     &[
                         format!("{:?}", addr).into(),
                         "outbound-full-relay".into(),
-                        false.into(), // no v2
+                        true.into(), // v2
                     ],
                 )
                 .map_err(|e| format!("Failed to initiate outbound connection: {:?}", e))?;

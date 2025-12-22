@@ -14,6 +14,8 @@ nyx = ["dep:fuzzamoto-nyx-sys"]
 compile_in_vm = []
 # Force every sent message to be followed by two ping/pong roundtrips
 force_send_and_ping = []
+# Use BIP-324 v2 transport instead of v1
+v2transport = []
 
 # Compile for netsplit bug detection
 oracle_netsplit = []

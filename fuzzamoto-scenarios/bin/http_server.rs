@@ -1,8 +1,7 @@
 use fuzzamoto::{
-    connections::V1Transport,
     fuzzamoto_main,
     scenarios::{Scenario, ScenarioInput, ScenarioResult},
-    targets::{BitcoinCoreTarget, Target},
+    targets::{BitcoinCoreTarget, TargetNode},
 };
 
 use arbitrary::{Arbitrary, Unstructured};
@@ -43,16 +42,14 @@ impl<'a> ScenarioInput<'a> for TestCase<'a> {
 /// 1. Connect to the HTTP server
 /// 2. Send a message to the HTTP server from a specific connection
 /// 3. Disconnect one of the existing connections
-struct HttpServerScenario<TX, T> {
+struct HttpServerScenario {
     target: BitcoinCoreTarget,
-    _phantom: std::marker::PhantomData<(TX, T)>,
 }
 
-impl<'a> Scenario<'a, TestCase<'a>> for HttpServerScenario<V1Transport, BitcoinCoreTarget> {
+impl<'a> Scenario<'a, TestCase<'a>> for HttpServerScenario {
     fn new(args: &[String]) -> Result<Self, String> {
         Ok(Self {
             target: BitcoinCoreTarget::from_path(&args[1])?,
-            _phantom: std::marker::PhantomData,
         })
     }
 
@@ -103,4 +100,4 @@ impl<'a> Scenario<'a, TestCase<'a>> for HttpServerScenario<V1Transport, BitcoinC
     }
 }
 
-fuzzamoto_main!(HttpServerScenario<fuzzamoto::connections::V1Transport, BitcoinCoreTarget>, TestCase);
+fuzzamoto_main!(HttpServerScenario, TestCase);

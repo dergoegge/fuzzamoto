@@ -18,6 +18,12 @@ use bitcoin::{
     },
 };
 
+// Transport type alias based on feature flag
+#[cfg(not(feature = "v2transport"))]
+type ScenarioTransport = fuzzamoto::connections::V1Transport;
+#[cfg(feature = "v2transport")]
+type ScenarioTransport = fuzzamoto::connections::V2Transport;
+
 // Create a newtype wrapper around Vec<u16>
 #[derive(Arbitrary)]
 struct TxIndices(Vec<u16>);
@@ -324,6 +330,6 @@ impl<TX: Transport, T: Target<TX>> Scenario<'_, TestCase> for CompactBlocksScena
 }
 
 fuzzamoto_main!(
-    CompactBlocksScenario::<fuzzamoto::connections::V1Transport, BitcoinCoreTarget>,
+    CompactBlocksScenario::<ScenarioTransport, BitcoinCoreTarget>,
     TestCase
 );

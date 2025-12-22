@@ -1,12 +1,18 @@
 use fuzzamoto::{
-    connections::{Transport, V1Transport},
+    connections::Transport,
     fuzzamoto_main,
     scenarios::{Scenario, ScenarioInput, ScenarioResult, generic::GenericScenario},
-    targets::{BitcoinCoreTarget, Target},
+    targets::{BitcoinCoreTarget, TargetNode},
 };
 
 use std::io::Write;
 use std::path::PathBuf;
+
+// Transport type alias based on feature flag
+#[cfg(not(feature = "v2transport"))]
+type ScenarioTransport = fuzzamoto::connections::V1Transport;
+#[cfg(feature = "v2transport")]
+type ScenarioTransport = fuzzamoto::connections::V2Transport;
 
 struct MempoolDotDatBytes<'a>(&'a [u8]);
 
@@ -19,16 +25,20 @@ impl<'a> ScenarioInput<'a> for MempoolDotDatBytes<'a> {
 /// `ImportMempoolScenario` is a scenario that tests Bitcoin Core's `importmempool` RPC command.
 ///
 /// Testcases represent mempool.dat files to be loaded.
-struct ImportMempoolScenario<TX: Transport, T: Target<TX>> {
-    inner: GenericScenario<TX, T>,
+struct ImportMempoolScenario<TX: Transport>
+where
+    BitcoinCoreTarget: fuzzamoto::targets::Target<TX>,
+{
+    inner: GenericScenario<TX, BitcoinCoreTarget>,
     mempool_path: PathBuf,
 }
 
-impl<'a> Scenario<'a, MempoolDotDatBytes<'a>>
-    for ImportMempoolScenario<V1Transport, BitcoinCoreTarget>
+impl<'a, TX: Transport> Scenario<'a, MempoolDotDatBytes<'a>> for ImportMempoolScenario<TX>
+where
+    BitcoinCoreTarget: fuzzamoto::targets::Target<TX>,
 {
     fn new(args: &[String]) -> Result<Self, String> {
-        let inner = GenericScenario::<V1Transport, BitcoinCoreTarget>::new(args)?;
+        let inner = GenericScenario::<TX, BitcoinCoreTarget>::new(args)?;
         // Creates it on node's workdir but could be in any other place.
         let mempool_path = inner.target.node.workdir();
 
@@ -59,6 +69,6 @@ impl<'a> Scenario<'a, MempoolDotDatBytes<'a>>
 }
 
 fuzzamoto_main!(
-    ImportMempoolScenario::<fuzzamoto::connections::V1Transport, BitcoinCoreTarget>,
+    ImportMempoolScenario::<ScenarioTransport>,
     MempoolDotDatBytes
 );

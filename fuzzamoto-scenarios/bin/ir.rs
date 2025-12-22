@@ -27,6 +27,12 @@ use fuzzamoto_ir::{
     compiler::{CompiledAction, CompiledMetadata, CompiledProgram, Compiler},
 };
 
+// Transport type alias based on feature flag
+#[cfg(not(feature = "v2transport"))]
+type ScenarioTransport = fuzzamoto::connections::V1Transport;
+#[cfg(feature = "v2transport")]
+type ScenarioTransport = fuzzamoto::connections::V2Transport;
+
 const COINBASE_MATURITY_HEIGHT_LIMIT: u32 = 100;
 const LATE_BLOCK_HEIGHT_LIMIT: u32 = 190;
 const COINBASE_VALUE: u64 = 25 * 100_000_000;
@@ -444,7 +450,4 @@ where
     }
 }
 
-fuzzamoto_main!(
-    IrScenario::<fuzzamoto::connections::V1Transport, BitcoinCoreTarget>,
-    TestCase
-);
+fuzzamoto_main!(IrScenario::<ScenarioTransport, BitcoinCoreTarget>, TestCase);

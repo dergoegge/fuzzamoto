@@ -1,7 +1,7 @@
 use fuzzamoto::{
     fuzzamoto_main,
     scenarios::{Scenario, ScenarioInput, ScenarioResult},
-    targets::{BitcoinCoreTarget, Target},
+    targets::{BitcoinCoreTarget, TargetNode},
 };
 
 use arbitrary::{Arbitrary, Unstructured};
