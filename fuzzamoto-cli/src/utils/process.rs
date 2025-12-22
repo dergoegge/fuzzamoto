@@ -67,7 +67,7 @@ pub fn run_scenario_command(
         cmd.env(key, value);
     }
 
-    cmd.stdout(Stdio::inherit()).stderr(Stdio::inherit());
+    cmd.stdout(Stdio::null()).stderr(Stdio::null());
 
     let status = cmd.status()?;
 

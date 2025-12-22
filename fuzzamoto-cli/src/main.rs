@@ -63,6 +63,28 @@ enum Commands {
         scenario: PathBuf,
     },
 
+    /// Create a summary describing which functions are unstable
+    Stability {
+        #[arg(long, help = "Path to the output file for the unstability summary")]
+        output: PathBuf,
+        #[arg(long, help = "Path to the input corpus directory")]
+        corpus: PathBuf,
+        #[arg(long, help = "Path to the list of unstable corpus entries")]
+        unstable_testcases: PathBuf,
+        #[arg(long, help = "Path to the llvm-profparser")]
+        llvm_profparser: PathBuf,
+        #[arg(
+            long,
+            help = "Path to the bitcoind binary that should be copied into the share directory"
+        )]
+        bitcoind: PathBuf,
+        #[arg(
+            long,
+            help = "Path to the fuzzamoto scenario binary that should be copied into the share directory"
+        )]
+        scenario: PathBuf,
+    },
+
     /// Fuzzamoto intermediate representation (IR) commands
     IR {
         #[command(subcommand)]
@@ -102,6 +124,21 @@ fn main() -> Result<()> {
         } => CoverageCommand::execute(
             output.clone(),
             corpus.clone(),
+            bitcoind.clone(),
+            scenario.clone(),
+        ),
+        Commands::Stability {
+            output,
+            unstable_testcases,
+            llvm_profparser,
+            corpus,
+            bitcoind,
+            scenario,
+        } => StabilityCommand::execute(
+            output.clone(),
+            corpus.clone(),
+            unstable_testcases.clone(),
+            llvm_profparser.clone(),
             bitcoind.clone(),
             scenario.clone(),
         ),
