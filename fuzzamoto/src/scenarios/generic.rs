@@ -1,6 +1,7 @@
 use crate::{
     connections::{Connection, ConnectionType, HandshakeOpts, Transport},
     dictionaries::{Dictionary, FileDictionary},
+    runners::Runner,
     scenarios::{Scenario, ScenarioInput, ScenarioResult},
     targets::Target,
     test_utils,
@@ -219,7 +220,7 @@ impl<'a, TX: Transport, T: Target<TX>> Scenario<'a, TestCase> for GenericScenari
         Self::from_target(target)
     }
 
-    fn run(&mut self, testcase: TestCase) -> ScenarioResult {
+    fn run(&mut self, testcase: TestCase, _runner: &dyn Runner) -> ScenarioResult {
         for action in testcase.actions {
             match action {
                 Action::Connect { connection_type: _ } => {
