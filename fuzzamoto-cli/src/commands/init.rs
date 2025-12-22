@@ -12,6 +12,7 @@ impl InitCommand {
         secondary_bitcoind: Option<PathBuf>,
         scenario: PathBuf,
         nyx_dir: PathBuf,
+        rpc_path: Option<PathBuf>,
     ) -> Result<()> {
         file_ops::ensure_sharedir_not_exists(&sharedir)?;
         file_ops::create_dir_all(&sharedir)?;
@@ -22,6 +23,11 @@ impl InitCommand {
 
         if let Some(ref secondary) = secondary_bitcoind {
             file_ops::ensure_file_exists(secondary)?;
+        }
+
+        if let Some(ref rpc) = rpc_path {
+            file_ops::ensure_file_exists(rpc)?;
+            file_ops::copy_file_to_dir(rpc, &sharedir)?;
         }
 
         let mut all_deps = Vec::new();
@@ -106,6 +112,11 @@ impl InitCommand {
             .and_then(|p| p.file_name())
             .and_then(|name| name.to_str());
 
+        let rpc_name = rpc_path
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .and_then(|name| name.to_str());
+
         nyx::create_nyx_script(
             &sharedir,
             &all_deps,
@@ -113,6 +124,7 @@ impl InitCommand {
             &crash_handler_name,
             scenario_name,
             secondary_name,
+            rpc_name,
         )?;
 
         Ok(())

@@ -43,6 +43,12 @@ enum Commands {
 
         #[arg(long, help = "Path to the nyx installation")]
         nyx_dir: PathBuf,
+
+        #[arg(
+            long,
+            help = "Path to the file with the RPC commands that should be copied into the share directory"
+        )]
+        rpc_path: Option<PathBuf>,
     },
 
     /// Create a html coverage report for a given corpus
@@ -86,6 +92,7 @@ fn main() -> Result<()> {
             secondary_bitcoind,
             scenario,
             nyx_dir,
+            rpc_path,
         } => InitCommand::execute(
             sharedir.clone(),
             crash_handler.clone(),
@@ -93,6 +100,7 @@ fn main() -> Result<()> {
             secondary_bitcoind.clone(),
             scenario.clone(),
             nyx_dir.clone(),
+            rpc_path.clone(),
         ),
         Commands::Coverage {
             output,
