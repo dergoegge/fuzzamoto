@@ -63,6 +63,10 @@ where
             .aggregated()
             .get("trace")
             .map_or("0%".to_string(), |c| c.to_string());
+        let stability = client_stats_manager
+            .aggregated()
+            .get("stability")
+            .map_or("100%".to_string(), |c| c.to_string());
         let global_stats = client_stats_manager.global_stats();
 
         let event = match event_msg {
@@ -95,7 +99,7 @@ where
 
         if let Some(event) = event {
             let fmt = format!(
-                "{} time: {} (x{}) execs: {} cov: {} corpus: {} exec/sec: {} bugs: {}",
+                "{} time: {} (x{}) execs: {} cov: {} corpus: {} exec/sec: {} bugs: {} stability: {}",
                 event,
                 global_stats.run_time_pretty,
                 global_stats.client_stats_count,
@@ -103,7 +107,8 @@ where
                 trace,
                 global_stats.corpus_size,
                 global_stats.execs_per_sec_pretty,
-                global_stats.objective_size
+                global_stats.objective_size,
+                stability,
             );
             (self.log_fn)(&fmt);
         }
