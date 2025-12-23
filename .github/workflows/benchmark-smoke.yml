@@ -1,0 +1,43 @@
+name: Benchmark Smoke Test
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * *"
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+      - name: Install nyx dependencies
+        run: sudo apt update && sudo apt install -y libgtk-3-dev pax-utils python3-msgpack python3-jinja2 libcapstone-dev
+      - name: Build CLI and fuzzer
+        run: cargo build --release --package fuzzamoto-cli --package fuzzamoto-libafl --features bench
+      - name: Run headless benchmark artifact checks
+        run: |
+          cargo test -p fuzzamoto-cli
+
+          mkdir -p /tmp/bench-base /tmp/bench-cand
+          cat > /tmp/bench-base/summary.json <<'JSON'
+          {"final_elapsed_s":60.0,"total_execs":120000,"mean_execs_per_sec":2000.0,"max_coverage_pct":5.0,"final_corpus_size":150}
+          JSON
+          cat > /tmp/bench-cand/summary.json <<'JSON'
+          {"final_elapsed_s":60.0,"total_execs":135000,"mean_execs_per_sec":2250.0,"max_coverage_pct":5.3,"final_corpus_size":160}
+          JSON
+          ./target/release/fuzzamoto-cli benchmark compare --baseline /tmp/bench-base --candidate /tmp/bench-cand
+
+          mkdir -p /tmp/suite-base /tmp/suite-cand
+          cat > /tmp/suite-base/suite_summary.json <<'JSON'
+          {"runs":1,"coverage_mean":5.0,"corpus_mean":150.0}
+          JSON
+          cat > /tmp/suite-cand/suite_summary.json <<'JSON'
+          {"runs":1,"coverage_mean":5.3,"corpus_mean":160.0}
+          JSON
+          ./target/release/fuzzamoto-cli benchmark compare --baseline /tmp/suite-base --candidate /tmp/suite-cand --suite
