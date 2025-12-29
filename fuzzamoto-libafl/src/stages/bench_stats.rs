@@ -1,17 +1,17 @@
 use std::{
     fs::OpenOptions,
     io::Write,
-    marker::PhantomData,
     path::PathBuf,
     time::{Duration, Instant},
 };
 
 use libafl::{
-    Evaluator, ExecutesInput,
+    Evaluator, ExecutesInput, HasNamedMetadata,
     corpus::Corpus,
     events::EventFirer,
     executors::{Executor, HasObservers},
-    observers::{CanTrack, MapObserver, ObserversTuple},
+    feedbacks::MapFeedbackMetadata,
+    observers::ObserversTuple,
     stages::{Restartable, Stage},
     state::{HasCorpus, HasExecutions, HasSolutions},
 };
@@ -20,9 +20,10 @@ use libafl_bolts::tuples::Handle;
 use crate::input::IrInput;
 
 /// Stage for collecting fuzzer stats useful for benchmarking
-pub struct BenchStatsStage<T, O> {
+pub struct BenchStatsStage<T> {
     cpu_id: u32,
     trace_handle: Handle<T>,
+    map_size: usize,
 
     initialised: Instant,
     last_update: Instant,
@@ -30,19 +31,15 @@ pub struct BenchStatsStage<T, O> {
 
     last_execs: u64,
 
-    // Cumulative union coverage map to report coverage% over time
-    union_map: Vec<u8>,
-
     stats_file_path: PathBuf,
     csv_header_written: bool,
-
-    _phantom: PhantomData<O>,
 }
 
-impl<T, O> BenchStatsStage<T, O> {
+impl<T> BenchStatsStage<T> {
     pub fn new(
         cpu_id: u32,
         trace_handle: Handle<T>,
+        map_size: usize,
         update_interval: Duration,
         stats_file_path: PathBuf,
     ) -> Self {
@@ -50,19 +47,18 @@ impl<T, O> BenchStatsStage<T, O> {
         Self {
             cpu_id,
             trace_handle,
+            map_size,
             initialised: Instant::now(),
             last_update,
             update_interval,
             last_execs: 0,
-            union_map: Vec::new(),
             stats_file_path,
             csv_header_written: false,
-            _phantom: PhantomData::default(),
         }
     }
 }
 
-impl<T, O, S> Restartable<S> for BenchStatsStage<T, O> {
+impl<T, S> Restartable<S> for BenchStatsStage<T> {
     fn should_restart(&mut self, _state: &mut S) -> Result<bool, libafl::Error> {
         Ok(true)
     }
@@ -72,20 +68,18 @@ impl<T, O, S> Restartable<S> for BenchStatsStage<T, O> {
     }
 }
 
-impl<E, EM, S, Z, OT, T, O> Stage<E, EM, S, Z> for BenchStatsStage<T, O>
+impl<E, EM, S, Z, OT, T> Stage<E, EM, S, Z> for BenchStatsStage<T>
 where
-    S: HasCorpus<IrInput> + HasExecutions + HasSolutions<IrInput>,
+    S: HasCorpus<IrInput> + HasExecutions + HasSolutions<IrInput> + HasNamedMetadata,
     E: Executor<EM, IrInput, S, Z> + HasObservers<Observers = OT>,
     EM: EventFirer<IrInput, S>,
     Z: Evaluator<E, EM, IrInput, S> + ExecutesInput<E, EM, IrInput, S>,
     OT: ObserversTuple<IrInput, S>,
-    O: MapObserver<Entry = u8>,
-    T: CanTrack + AsRef<O>,
 {
     fn perform(
         &mut self,
         _fuzzer: &mut Z,
-        executor: &mut E,
+        _executor: &mut E,
         state: &mut S,
         _manager: &mut EM,
     ) -> Result<(), libafl::Error> {
@@ -96,31 +90,16 @@ where
         let since_last = now - self.last_update;
         self.last_update = now;
 
-        let observers = executor.observers();
-        let map_observer = observers[&self.trace_handle].as_ref();
-        let initial_entry_value = map_observer.initial();
+        // Get cumulative coverage from MapFeedback's metadata
+        let covered = state
+            .named_metadata_map()
+            .get::<MapFeedbackMetadata<u8>>(self.trace_handle.name())
+            .map_or(0, |meta| meta.num_covered_map_indexes);
 
-        // Ensure union map is allocated and merged with current snapshot.
-        if self.union_map.len() != map_observer.len() {
-            self.union_map = vec![0u8; map_observer.len()];
-        }
-
-        for (idx, byte) in self.union_map.iter_mut().enumerate() {
-            let val = map_observer.get(idx);
-            if val > *byte {
-                *byte = val;
-            }
-        }
-
-        let covered = self
-            .union_map
-            .iter()
-            .filter(|b| **b != initial_entry_value)
-            .count();
-        let coverage_pct = if map_observer.len() == 0 {
+        let coverage_pct = if self.map_size == 0 {
             0.0
         } else {
-            (covered as f64 / map_observer.len() as f64) * 100.0
+            (covered as f64 / self.map_size as f64) * 100.0
         };
 
         let elapsed = now.duration_since(self.initialised).as_secs_f64();

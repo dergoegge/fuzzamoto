@@ -126,6 +126,7 @@ where
             u32::try_from(self.client_description.core_id().0)
                 .expect("core_id should fit into u32"),
             trace_handle.clone(),
+            helper.bitmap_size,
             Duration::from_secs(self.options.bench_snapshot_secs()),
             self.options.bench_dir().join(format!(
                 "bench-cpu_{:03}.csv",
