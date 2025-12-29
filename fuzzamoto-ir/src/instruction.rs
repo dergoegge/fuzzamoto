@@ -63,10 +63,7 @@ impl Instruction {
             | Operation::SendTx
             | Operation::AddAddrV2
             | Operation::LoadBytes(_)
-            | Operation::BuildTaprootKeypair { .. }
             | Operation::LoadTaprootAnnex { .. }
-            | Operation::LoadTaprootLeafVersion(_)
-            | Operation::AddTapLeaf { .. }
             | Operation::BuildPayToTaproot
             | Operation::TaprootScriptsUseAnnex
             | Operation::TaprootTxoUseAnnex => true,
@@ -98,6 +95,7 @@ impl Instruction {
             | Operation::BuildPayToPubKeyHash
             | Operation::BuildPayToWitnessPubKeyHash
             | Operation::BuildPayToTaproot
+            | Operation::BuildTaprootTree { .. }
             | Operation::AddTxToFilter
             | Operation::AddTxoToFilter
             | Operation::BuildFilterAddFromTx
@@ -105,7 +103,6 @@ impl Instruction {
             | Operation::LoadPrivateKey(_)
             | Operation::LoadSigHashFlags(_)
             | Operation::LoadTxo { .. }
-            | Operation::BuildTaprootKeypair { .. }
             | Operation::LoadTaprootAnnex { .. }
             | Operation::LoadHeader { .. }
             | Operation::LoadAmount(..)
@@ -117,7 +114,6 @@ impl Instruction {
             | Operation::LoadNonce(..)
             | Operation::LoadFilterLoad { .. }
             | Operation::LoadFilterAdd { .. }
-            | Operation::LoadTaprootLeafVersion(_)
             | Operation::AddWitness
             | Operation::SendTx
             | Operation::SendTxNoWit
@@ -156,8 +152,6 @@ impl Instruction {
             | Operation::TakeCoinbaseTxo
             | Operation::TaprootScriptsUseAnnex
             | Operation::TaprootTxoUseAnnex
-            | Operation::AddTapLeaf { .. }
-            | Operation::AddTaprootHiddenNode { .. }
             | Operation::TakeTxo => true,
 
             Operation::Nop { .. }
@@ -186,9 +180,7 @@ impl Instruction {
             | Operation::EndBuildCoinbaseTxOutputs
             | Operation::BeginBuildBlockTxn
             | Operation::EndBuildBlockTxn
-            | Operation::Probe
-            | Operation::BeginTaprootTree
-            | Operation::EndTaprootTree { .. } => false,
+            | Operation::Probe => false,
         }
     }
 
@@ -211,7 +203,6 @@ impl Instruction {
                 Operation::BeginBuildCoinbaseTxOutputs => {
                     Some(InstructionContext::BuildCoinbaseTxOutputs)
                 }
-                Operation::BeginTaprootTree => Some(InstructionContext::TaprootTree),
                 _ => unimplemented!("Every block begin enters a context"),
             };
         }
@@ -245,5 +236,4 @@ pub enum InstructionContext {
     BuildCoinbaseTx,
     BuildCoinbaseTxOutputs,
     BuildBlockTxn,
-    TaprootTree,
 }

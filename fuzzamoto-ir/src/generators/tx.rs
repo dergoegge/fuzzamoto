@@ -1,5 +1,5 @@
 use crate::{
-    IndexedVariable, Operation, PerTestcaseMetadata,
+    IndexedVariable, Operation, PerTestcaseMetadata, TaprootLeafSpec,
     generators::{Generator, ProgramBuilder},
 };
 use bitcoin::{
@@ -533,58 +533,37 @@ impl<R: RngCore> Generator<R> for CoinbaseTxGenerator {
 }
 
 fn build_taproot_scripts<R: RngCore>(builder: &mut ProgramBuilder, rng: &mut R) -> IndexedVariable {
-    let keypair_var = builder.force_append_expect_output(
-        vec![],
-        Operation::BuildTaprootKeypair {
-            secret_key: gen_secret_key_bytes(rng),
-        },
-    );
-    let mut_tree_var = builder.force_append_expect_output(vec![], Operation::BeginTaprootTree);
+    let secret_key = gen_secret_key_bytes(rng);
 
-    // 0 leaves => key-path only spend; otherwise script-path with a selected leaf.
-    let leaf_count = if rng.gen_bool(0.5) {
-        0
-    } else {
-        rng.gen_range(1..=4)
-    };
-
-    let mut deepest_leaf_depth = 0u8;
-    if leaf_count > 0 {
-        for leaf_idx in 0..leaf_count {
-            maybe_insert_hidden_nodes(builder, rng, mut_tree_var.index);
-
-            let script_var = builder
-                .force_append_expect_output(vec![], Operation::LoadBytes(random_tapscript(rng)));
-            let (version, _) = random_leaf_version(rng);
-            let version_var = builder
-                .force_append_expect_output(vec![], Operation::LoadTaprootLeafVersion(version));
-
-            let depth = random_leaf_depth(rng, leaf_idx == 0);
-            deepest_leaf_depth = deepest_leaf_depth.max(depth);
-
-            builder.force_append(
-                vec![mut_tree_var.index, script_var.index, version_var.index],
-                Operation::AddTapLeaf { depth },
-            );
-        }
-
-        maybe_attach_deep_hidden_node(builder, rng, mut_tree_var.index, deepest_leaf_depth);
-    }
-
-    let selected_leaf_index = if leaf_count == 0 {
+    // Key-path only (None) or script-path (Some) with one spendable leaf.
+    let script_leaf = if rng.gen_bool(0.5) {
         None
     } else {
-        Some(rng.gen_range(0..leaf_count as u8))
+        let (version, _) = random_leaf_version(rng);
+        let script = random_tapscript(rng);
+        let merkle_path = random_merkle_path(rng);
+        Some(TaprootLeafSpec {
+            script,
+            version,
+            merkle_path,
+        })
     };
 
     let spend_info_var = builder.force_append_expect_output(
-        vec![mut_tree_var.index, keypair_var.index],
-        Operation::EndTaprootTree {
-            selected_leaf_index,
+        vec![],
+        Operation::BuildTaprootTree {
+            secret_key,
+            script_leaf,
         },
     );
 
     builder.force_append_expect_output(vec![spend_info_var.index], Operation::BuildPayToTaproot)
+}
+
+/// Generate a merkle path to simulate additional leaves in the taproot tree.
+fn random_merkle_path<R: RngCore>(rng: &mut R) -> Vec<[u8; 32]> {
+    let depth = rng.gen_range(0..=4);
+    (0..depth).map(|_| random_node_hash(rng)).collect()
 }
 
 fn gen_secret_key_bytes<R: RngCore>(rng: &mut R) -> [u8; 32] {
@@ -638,66 +617,10 @@ fn random_tapscript<R: RngCore>(rng: &mut R) -> Vec<u8> {
     }
 }
 
-fn random_leaf_depth<R: RngCore>(rng: &mut R, ensure_depth: bool) -> u8 {
-    if ensure_depth {
-        rng.gen_range(3..=5)
-    } else {
-        rng.gen_range(0..=5)
-    }
-}
-
 fn random_node_hash<R: RngCore>(rng: &mut R) -> [u8; 32] {
     let mut hash = [0u8; 32];
     rng.fill_bytes(&mut hash);
     hash
-}
-
-fn maybe_insert_hidden_nodes<R: RngCore>(
-    builder: &mut ProgramBuilder,
-    rng: &mut R,
-    tree_var_index: usize,
-) {
-    const MAX_HIDDEN_NODES: usize = 2;
-    const MIN_DEPTH: u8 = 1;
-    const MAX_DEPTH: u8 = 3;
-
-    if !rng.gen_bool(0.5) {
-        return;
-    }
-
-    let hidden_count = rng.gen_range(1..=MAX_HIDDEN_NODES);
-    for _ in 0..hidden_count {
-        builder.force_append(
-            vec![tree_var_index],
-            Operation::AddTaprootHiddenNode {
-                depth: rng.gen_range(MIN_DEPTH..=MAX_DEPTH),
-                hash: random_node_hash(rng),
-            },
-        );
-    }
-}
-
-/// Add a hidden sibling near the deepest visible leaf so script-path witnesses exercise multi-hash
-/// control blocks.
-fn maybe_attach_deep_hidden_node<R: RngCore>(
-    builder: &mut ProgramBuilder,
-    rng: &mut R,
-    tree_index: usize,
-    deepest_leaf_depth: u8,
-) {
-    if deepest_leaf_depth <= 1 {
-        return;
-    }
-    let depth = deepest_leaf_depth.saturating_sub(1);
-    if rng.gen_bool(0.5) {
-        builder.force_append(
-            vec![tree_index],
-            Operation::AddTaprootHiddenNode {
-                depth,
-                hash: random_node_hash(rng),
-            },
-        );
-    }
 }
 
 impl Default for CoinbaseTxGenerator {

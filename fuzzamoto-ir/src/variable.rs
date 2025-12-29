@@ -66,9 +66,5 @@ pub enum Variable {
     ConstCoinbaseTx,
 
     TaprootSpendInfo,
-    TaprootKeypair,
-    TaprootLeaf,
-    TaprootLeafVersion,
-    MutTaprootTree,
     TaprootAnnex,
 }
