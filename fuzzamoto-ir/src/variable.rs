@@ -64,4 +64,7 @@ pub enum Variable {
     MutBlockTxn,
     ConstBlockTxn,
     ConstCoinbaseTx,
+
+    TaprootSpendInfo,
+    TaprootAnnex,
 }

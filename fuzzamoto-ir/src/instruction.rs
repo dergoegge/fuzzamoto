@@ -63,7 +63,11 @@ impl Instruction {
             | Operation::SendTxNoWit
             | Operation::SendTx
             | Operation::AddAddrV2
-            | Operation::LoadBytes(_) => true,
+            | Operation::LoadBytes(_)
+            | Operation::LoadTaprootAnnex { .. }
+            | Operation::BuildPayToTaproot
+            | Operation::TaprootScriptsUseAnnex
+            | Operation::TaprootTxoUseAnnex => true,
             _ => false,
         }
     }
@@ -91,6 +95,8 @@ impl Instruction {
             | Operation::BuildPayToPubKey
             | Operation::BuildPayToPubKeyHash
             | Operation::BuildPayToWitnessPubKeyHash
+            | Operation::BuildPayToTaproot
+            | Operation::BuildTaprootTree { .. }
             | Operation::AddTxToFilter
             | Operation::AddTxoToFilter
             | Operation::BuildFilterAddFromTx
@@ -98,6 +104,7 @@ impl Instruction {
             | Operation::LoadPrivateKey(_)
             | Operation::LoadSigHashFlags(_)
             | Operation::LoadTxo { .. }
+            | Operation::LoadTaprootAnnex { .. }
             | Operation::LoadHeader { .. }
             | Operation::LoadAmount(..)
             | Operation::LoadTxVersion(..)
@@ -144,6 +151,8 @@ impl Instruction {
             | Operation::SendCompactBlock
             | Operation::SendBlockTxn
             | Operation::TakeCoinbaseTxo
+            | Operation::TaprootScriptsUseAnnex
+            | Operation::TaprootTxoUseAnnex
             | Operation::TakeTxo => true,
 
             Operation::Nop { .. }

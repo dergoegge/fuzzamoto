@@ -228,6 +228,17 @@ impl<R: RngCore, M: OperationByteMutator> Mutator<R> for OperationMutator<M> {
                 .choose(rng)
                 .unwrap(),
             ),
+            Operation::LoadTaprootAnnex { annex } => {
+                self.byte_array_mutator.mutate_bytes(annex);
+                if annex.is_empty() || annex[0] != 0x50 {
+                    annex.insert(0, 0x50);
+                } else {
+                    annex[0] = 0x50;
+                }
+                Operation::LoadTaprootAnnex {
+                    annex: annex.clone(),
+                }
+            }
             Operation::LoadTxVersion(version) => Operation::LoadTxVersion(
                 // Standard tx version should be added here
                 *[0u32, 1, 2, 3, 4, 0xffffffff - 1, 0xffffffff, rng.r#gen()]
