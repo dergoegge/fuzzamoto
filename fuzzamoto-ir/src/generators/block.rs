@@ -183,7 +183,7 @@ impl<R: RngCore> Generator<R> for TipBlockGenerator {
         &self,
         program: &crate::Program,
         rng: &mut R,
-        meta: Option<&PerTestcaseMetadata>,
+        meta: Option<&mut PerTestcaseMetadata>,
     ) -> Option<usize> {
         if let Some(meta) = meta.as_ref()
             && let Some(nth) = meta.recent_blocks.iter().max()
