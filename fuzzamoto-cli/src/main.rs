@@ -7,6 +7,8 @@ use commands::*;
 use error::Result;
 use std::path::PathBuf;
 
+use crate::commands::coverage_batch::CoverageBatchCommand;
+
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
@@ -61,6 +63,39 @@ enum Commands {
             help = "Path to the fuzzamoto scenario binary that should be copied into the share directory"
         )]
         scenario: PathBuf,
+        #[arg(
+            long,
+            value_name = "PROFDATA",
+            num_args = 1..,
+            help = "Existing .profdata files to merge instead of generating fresh coverage"
+        )]
+        profraws: Option<Vec<PathBuf>>,
+        #[arg(
+            long,
+            default_value_t = false,
+            help = "Only execute the corpus inputs and write .profraw files; skip .profdata merge and HTML report generation"
+        )]
+        run_only: bool,
+    },
+
+    /// Create a html coverage report for a given corpus, runs using multiple docker instances
+    CoverageBatch {
+        #[arg(long, help = "Path to the output directory for the coverage report")]
+        output: PathBuf,
+        #[arg(long, help = "Path to the input corpus directory")]
+        corpus: PathBuf,
+        #[arg(
+            long,
+            help = "Path to the bitcoind binary that should be copied into the share directory"
+        )]
+        bitcoind: PathBuf,
+        #[arg(
+            long,
+            help = "Path to the fuzzamoto scenario binary that should be copied into the share directory"
+        )]
+        scenario: PathBuf,
+        #[arg(long, help = "The docker image id of fuzzamoto-coverage")]
+        docker_image: String,
     },
 
     /// Fuzzamoto intermediate representation (IR) commands
@@ -99,11 +134,28 @@ fn main() -> Result<()> {
             corpus,
             bitcoind,
             scenario,
+            profraws,
+            run_only,
         } => CoverageCommand::execute(
             output.clone(),
             corpus.clone(),
             bitcoind.clone(),
             scenario.clone(),
+            profraws.clone(),
+            *run_only,
+        ),
+        Commands::CoverageBatch {
+            output,
+            corpus,
+            bitcoind,
+            scenario,
+            docker_image,
+        } => CoverageBatchCommand::execute(
+            output.clone(),
+            corpus.clone(),
+            bitcoind.clone(),
+            scenario.clone(),
+            docker_image.clone(),
         ),
         Commands::IR { command } => IrCommand::execute(command),
     }

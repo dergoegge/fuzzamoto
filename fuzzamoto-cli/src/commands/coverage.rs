@@ -10,21 +10,40 @@ impl CoverageCommand {
         corpus: PathBuf,
         bitcoind: PathBuf,
         scenario: PathBuf,
+        profraws: Option<Vec<PathBuf>>,
+        run_only: bool,
     ) -> Result<()> {
         file_ops::ensure_file_exists(&bitcoind)?;
         file_ops::ensure_file_exists(&scenario)?;
 
-        let corpus_files = file_ops::read_dir_files(&corpus)?;
-
-        // Run scenario for each corpus file
-        for corpus_file in corpus_files {
-            if let Err(e) = Self::run_one_input(&output, &corpus_file, &bitcoind, &scenario) {
-                log::error!("Failed to run input ({:?}): {}", corpus_file, e);
+        if run_only {
+            let corpus_files = file_ops::read_dir_files(&corpus)?;
+            for corpus_file in corpus_files {
+                if let Err(e) = Self::run_one_input(&output, &corpus_file, &bitcoind, &scenario) {
+                    log::error!("Failed to run input ({:?}): {}", corpus_file, e);
+                }
             }
+            return Ok(());
         }
 
-        Self::generate_coverage_report(&output, &bitcoind)?;
+        let profdata = match profraws {
+            Some(profraws) => Self::merge_profraws(&output, &profraws)?,
+            None => {
+                let corpus_files = file_ops::read_dir_files(&corpus)?;
+                log::info!("{:?}", corpus_files);
+                // Run scenario for each corpus file
+                for corpus_file in corpus_files {
+                    if let Err(e) = Self::run_one_input(&output, &corpus_file, &bitcoind, &scenario)
+                    {
+                        log::error!("Failed to run input ({:?}): {}", corpus_file, e);
+                    }
+                }
 
+                Self::generate_profdata(&output)?
+            }
+        };
+
+        Self::generate_report(&output, &bitcoind, &profdata)?;
         Ok(())
     }
 
@@ -52,7 +71,78 @@ impl CoverageCommand {
         Ok(())
     }
 
-    fn generate_coverage_report(output: &PathBuf, bitcoind: &PathBuf) -> Result<()> {
+    fn generate_report(
+        output: &PathBuf,
+        bitcoind: &PathBuf,
+        coverage_profdata: &PathBuf,
+    ) -> Result<()> {
+        // Generate HTML report
+        let coverage_report_dir = output.join("coverage-report");
+        let coverage_report_str = coverage_report_dir.to_str().unwrap();
+        let instr_profile_arg = format!("-instr-profile={}", coverage_profdata.to_str().unwrap());
+        let output_dir_arg = format!("-output-dir={}", coverage_report_str);
+
+        let show_args = vec![
+            "show",
+            bitcoind.to_str().unwrap(),
+            &instr_profile_arg,
+            "-format=html",
+            "-show-directory-coverage",
+            "-show-branches=count",
+            &output_dir_arg,
+            "-Xdemangler=c++filt",
+        ];
+
+        let show_cmd = process::get_llvm_command("llvm-cov");
+        process::run_command_with_status(&show_cmd, &show_args, None)?;
+
+        log::info!(
+            "Coverage report generated in: {}",
+            coverage_report_dir.display()
+        );
+
+        Ok(())
+    }
+
+    fn merge_profraws(output: &PathBuf, profraws: &Vec<PathBuf>) -> Result<PathBuf> {
+        if profraws.is_empty() {
+            return Err(CliError::InvalidInput(
+                "No profraws directory provided".to_string(),
+            ));
+        }
+
+        let mut profraw_files = Vec::new();
+
+        for p in profraws {
+            for entry in std::fs::read_dir(p)? {
+                let path = entry?.path();
+                if let Some(file_name) = path.file_name().and_then(|s| s.to_str()) {
+                    if file_name.contains("coverage.profraw") {
+                        profraw_files.push(path.to_str().unwrap().to_string());
+                    }
+                }
+            }
+        }
+
+        if profraw_files.is_empty() {
+            return Err(CliError::ProcessError("No profraw files found".to_string()));
+        }
+
+        let merged = output.join("merged.profdata");
+        let mut merge_args = vec!["merge", "-sparse"];
+
+        let inputs: Vec<&str> = profraw_files.iter().map(|p| p.as_str()).collect();
+        log::info!("Merging profdata from {:?}", inputs);
+
+        merge_args.extend(inputs);
+        merge_args.extend(["-o", merged.to_str().unwrap()]);
+        let merge_cmd = process::get_llvm_command("llvm-profdata");
+        process::run_command_with_status(&merge_cmd, &merge_args, None)?;
+
+        Ok(merged)
+    }
+
+    fn generate_profdata(output: &PathBuf) -> Result<PathBuf> {
         // Find all profraw files
         let mut profraw_files = Vec::new();
         for entry in std::fs::read_dir(output)? {
@@ -80,31 +170,6 @@ impl CoverageCommand {
         let merge_cmd = process::get_llvm_command("llvm-profdata");
         process::run_command_with_status(&merge_cmd, &merge_args, None)?;
 
-        // Generate HTML report
-        let coverage_report_dir = output.join("coverage-report");
-        let coverage_report_str = coverage_report_dir.to_str().unwrap();
-        let instr_profile_arg = format!("-instr-profile={}", coverage_profdata_str);
-        let output_dir_arg = format!("-output-dir={}", coverage_report_str);
-
-        let show_args = vec![
-            "show",
-            bitcoind.to_str().unwrap(),
-            &instr_profile_arg,
-            "-format=html",
-            "-show-directory-coverage",
-            "-show-branches=count",
-            &output_dir_arg,
-            "-Xdemangler=c++filt",
-        ];
-
-        let show_cmd = process::get_llvm_command("llvm-cov");
-        process::run_command_with_status(&show_cmd, &show_args, None)?;
-
-        log::info!(
-            "Coverage report generated in: {}",
-            coverage_report_dir.display()
-        );
-
-        Ok(())
+        Ok(coverage_profdata)
     }
 }
