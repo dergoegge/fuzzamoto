@@ -6,6 +6,9 @@ pub use bench_stats::*;
 pub mod probe;
 pub use probe::*;
 
+pub mod stability_check;
+pub use stability_check::*;
+
 pub mod verify_timeouts;
 
 pub use verify_timeouts::*;
