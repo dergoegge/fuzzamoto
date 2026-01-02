@@ -11,6 +11,52 @@ pub struct BlockGenerator {
     coinbase_generator: CoinbaseTxGenerator,
 }
 
+pub fn grafting_header<R: RngCore>(
+    headers: &[Header],
+    builder: &mut ProgramBuilder,
+    rng: &mut R,
+    meta: Option<&PerTestcaseMetadata>,
+) -> Option<(usize, u64)> {
+    let meta = meta.as_ref()?;
+    let nth = meta.recent_blocks.iter().max();
+
+    // we need to know the current height first.
+    let tip_height = if let Some(nth) = nth {
+        nth.height
+    } else if let Some(tip_header) = headers.iter().max_by_key(|h| h.height) {
+        tip_header.height as u64
+    } else {
+        return None;
+    };
+
+    if !meta.recent_blocks().is_empty() {
+        // it is possible that chose.height == tip_height, but we accept it
+        let chosen = &meta.recent_blocks()[rng.gen_range(0..meta.recent_blocks().len())];
+        Some((chosen.defining_block.0, tip_height - chosen.height + 1))
+    } else if !headers.is_empty() {
+        let header = &headers[rng.gen_range(0..headers.len())];
+        let var = builder
+            .append(Instruction {
+                inputs: vec![],
+                operation: Operation::LoadHeader {
+                    prev: header.prev,
+                    merkle_root: header.merkle_root,
+                    nonce: header.nonce,
+                    bits: header.bits,
+                    time: header.time,
+                    version: header.version,
+                    height: header.height,
+                },
+            })
+            .expect("Inserting LoadHeader should always succeed")
+            .pop()
+            .expect("LoadHeader should always produce a var");
+        Some((var.index, tip_height - header.height as u64 + 1))
+    } else {
+        None
+    }
+}
+
 pub fn tip_header(
     header: &Option<Header>,
     builder: &mut ProgramBuilder,
@@ -207,6 +253,79 @@ impl TipBlockGenerator {
         Self {
             coinbase_generator: CoinbaseTxGenerator::default(),
             snapshot_tip: max_header,
+        }
+    }
+}
+
+pub struct ReorgBlockGenerator {
+    coinbase_generator: CoinbaseTxGenerator,
+    headers: Vec<Header>,
+}
+
+impl<R: RngCore> Generator<R> for ReorgBlockGenerator {
+    fn generate(
+        &self,
+        builder: &mut ProgramBuilder,
+        rng: &mut R,
+        meta: Option<&PerTestcaseMetadata>,
+    ) -> GeneratorResult {
+        let Some((mut header_var, length)) = grafting_header(&self.headers, builder, rng, meta)
+        else {
+            return Ok(());
+        };
+
+        for _ in 0..length {
+            let (new_header, _) =
+                build_block_from_header(&self.coinbase_generator, builder, rng, header_var, meta)?;
+            header_var = new_header.index
+        }
+
+        Ok(())
+    }
+
+    fn name(&self) -> &'static str {
+        "ReorgBlockGenerator"
+    }
+
+    fn choose_index(
+        &self,
+        program: &crate::Program,
+        rng: &mut R,
+        meta: Option<&PerTestcaseMetadata>,
+    ) -> Option<usize> {
+        if let Some(meta) = meta.as_ref()
+            && let Some(max) = meta.recent_blocks.iter().max_by_key(|i| i.defining_block.1)
+        {
+            let from: usize = max.defining_block.1 + 1; // from here, any header that metadata has is defined.
+            program.get_random_instruction_index_from(
+                rng,
+                <Self as Generator<R>>::requested_context(self),
+                from,
+            )
+        } else {
+            program
+                .get_random_instruction_index(rng, <Self as Generator<R>>::requested_context(self))
+        }
+    }
+}
+
+impl Default for ReorgBlockGenerator {
+    fn default() -> Self {
+        Self {
+            coinbase_generator: CoinbaseTxGenerator::default(),
+            headers: Vec::new(),
+        }
+    }
+}
+
+impl ReorgBlockGenerator {
+    pub fn new(mut headers: Vec<Header>) -> Self {
+        headers.sort_by_key(|h| std::cmp::Reverse(h.height));
+        headers.truncate(10);
+
+        Self {
+            coinbase_generator: CoinbaseTxGenerator::default(),
+            headers,
         }
     }
 }
