@@ -4,6 +4,7 @@ use std::fmt;
 pub enum CliError {
     IoError(std::io::Error),
     JsonError(serde_json::Error),
+    YamlError(serde_yaml::Error),
     PostcardError(postcard::Error),
     ProcessError(String),
     InvalidInput(String),
@@ -16,6 +17,7 @@ impl fmt::Display for CliError {
         match self {
             CliError::IoError(e) => write!(f, "IO error: {}", e),
             CliError::JsonError(e) => write!(f, "JSON error: {}", e),
+            CliError::YamlError(e) => write!(f, "YAML error: {}", e),
             CliError::PostcardError(e) => write!(f, "Postcard error: {}", e),
             CliError::ProcessError(msg) => write!(f, "Process error: {}", msg),
             CliError::InvalidInput(msg) => write!(f, "Invalid input: {}", msg),
@@ -36,6 +38,12 @@ impl From<std::io::Error> for CliError {
 impl From<serde_json::Error> for CliError {
     fn from(error: serde_json::Error) -> Self {
         CliError::JsonError(error)
+    }
+}
+
+impl From<serde_yaml::Error> for CliError {
+    fn from(error: serde_yaml::Error) -> Self {
+        CliError::YamlError(error)
     }
 }
 

@@ -1,61 +1,65 @@
 use std::{
-    collections::HashSet,
     fs::OpenOptions,
     io::Write,
-    marker::PhantomData,
     path::PathBuf,
     time::{Duration, Instant},
 };
 
 use libafl::{
-    Evaluator, ExecutesInput, HasMetadata,
+    Evaluator, ExecutesInput, HasNamedMetadata,
+    corpus::Corpus,
     events::EventFirer,
     executors::{Executor, HasObservers},
-    observers::{CanTrack, MapObserver, ObserversTuple},
+    feedbacks::MapFeedbackMetadata,
+    observers::ObserversTuple,
     stages::{Restartable, Stage},
-    state::{HasCorpus, HasCurrentTestcase},
+    state::{HasCorpus, HasExecutions, HasSolutions},
 };
-use libafl_bolts::tuples::Handle;
-
 use crate::input::IrInput;
 
-/// Stage for collecting fuzzer stats useful for benchmarking
-pub struct BenchStatsStage<T, O> {
-    trace_handle: Handle<T>,
-
-    last_coverage: HashSet<usize>,
+/// Stage for collecting fuzzer stats useful for benchmarking.
+///
+/// Note: `feedback_name` must match the name used to register `MapFeedbackMetadata`
+/// (i.e., the feedback's name), which may differ from the observer's name.
+pub struct BenchStatsStage {
+    cpu_id: u32,
+    feedback_name: String,
+    map_size: usize,
 
     initialised: Instant,
     last_update: Instant,
     update_interval: Duration,
 
+    last_execs: u64,
+
     stats_file_path: PathBuf,
     csv_header_written: bool,
-
-    _phantom: PhantomData<O>,
 }
 
-impl<T, O> BenchStatsStage<T, O> {
+impl BenchStatsStage {
     pub fn new(
-        trace_handle: Handle<T>,
+        cpu_id: u32,
+        feedback_name: impl Into<String>,
+        map_size: usize,
         update_interval: Duration,
         stats_file_path: PathBuf,
     ) -> Self {
         let last_update = Instant::now() - 2 * update_interval;
         Self {
-            trace_handle,
-            last_coverage: HashSet::new(),
+            cpu_id,
+            feedback_name: feedback_name.into(),
+            map_size,
             initialised: Instant::now(),
             last_update,
             update_interval,
+            last_execs: 0,
             stats_file_path,
             csv_header_written: false,
-            _phantom: PhantomData::default(),
         }
     }
 }
 
-impl<T, O, S> Restartable<S> for BenchStatsStage<T, O> {
+impl<S> Restartable<S> for BenchStatsStage {
     fn should_restart(&mut self, _state: &mut S) -> Result<bool, libafl::Error> {
         Ok(true)
     }
@@ -65,70 +69,120 @@ impl<T, O, S> Restartable<S> for BenchStatsStage<T, O> {
     }
 }
 
-impl<E, EM, S, Z, OT, T, O> Stage<E, EM, S, Z> for BenchStatsStage<T, O>
+impl<E, EM, S, Z, OT> Stage<E, EM, S, Z> for BenchStatsStage
 where
-    S: HasCorpus<IrInput> + HasCurrentTestcase<IrInput> + HasMetadata,
+    S: HasCorpus<IrInput> + HasExecutions + HasSolutions<IrInput> + HasNamedMetadata,
     E: Executor<EM, IrInput, S, Z> + HasObservers<Observers = OT>,
     EM: EventFirer<IrInput, S>,
     Z: Evaluator<E, EM, IrInput, S> + ExecutesInput<E, EM, IrInput, S>,
     OT: ObserversTuple<IrInput, S>,
-    O: MapObserver,
-    T: CanTrack + AsRef<O>,
 {
     fn perform(
         &mut self,
         _fuzzer: &mut Z,
-        executor: &mut E,
-        _state: &mut S,
+        _executor: &mut E,
+        state: &mut S,
         _manager: &mut EM,
     ) -> Result<(), libafl::Error> {
         let now = Instant::now();
         if now < self.last_update + self.update_interval {
             return Ok(());
         }
-        // Only dump new stats every `self.update_interval`
+        let since_last = now - self.last_update;
         self.last_update = now;
 
-        let observers = executor.observers();
-        let map_observer = observers[&self.trace_handle].as_ref();
-        let initial_entry_value = map_observer.initial();
+        // Get cumulative coverage from MapFeedback's metadata
+        let covered = state
+            .named_metadata_map()
+            .get::<MapFeedbackMetadata<u8>>(&self.feedback_name)
+            .map_or(0, |meta| meta.num_covered_map_indexes);
 
-        let mut new_coverage = Vec::new();
-        for i in 0..map_observer.len() {
-            if map_observer.get(i) != initial_entry_value {
-                if self.last_coverage.insert(i) {
-                    new_coverage.push(i);
-                }
+        let coverage_pct = if self.map_size == 0 {
+            0.0
+        } else {
+            (covered as f64 / self.map_size as f64) * 100.0
+        };
+
+        let elapsed = now.duration_since(self.initialised).as_secs_f64();
+        let delta_secs = since_last.as_secs_f64();
+
+        let total_execs = *state.executions();
+        let execs_per_sec = if delta_secs > 0.0 {
+            (total_execs.saturating_sub(self.last_execs) as f64) / delta_secs
+        } else {
+            0.0
+        };
+        self.last_execs = total_execs;
+
+        let corpus_size = state.corpus().count();
+        let crashes = state.solutions().count();
+
+        let Some(parent) = self.stats_file_path.parent() else {
+            log::warn!(
+                "bench_stats: cpu={} missing parent dir, skipping write",
+                self.cpu_id
+            );
+            return Ok(());
+        };
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            log::warn!(
+                "bench_stats: cpu={} failed to create bench dir {}: {e}",
+                self.cpu_id,
+                parent.display()
+            );
+            return Ok(());
+        }
+        let Ok(stats_file) = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.stats_file_path)
+        else {
+            log::warn!(
+                "bench_stats: cpu={} failed to open stats file {}, skipping write",
+                self.cpu_id,
+                self.stats_file_path.display()
+            );
+            return Ok(());
+        };
+
+        if !self.csv_header_written {
+            if writeln!(
+                &stats_file,
+                "elapsed_s,execs,execs_per_sec,coverage_pct,corpus_size,crashes"
+            )
+            .is_err()
+            {
+                log::warn!(
+                    "bench_stats: cpu={} failed to write CSV header to {}",
+                    self.cpu_id,
+                    self.stats_file_path.display()
+                );
+                return Ok(());
             }
+            self.csv_header_written = true;
         }
 
-        // Write the new coverage indices to the stats file as CSV
-        if !new_coverage.is_empty() {
-            // We need to store the path temporarily since we can't borrow self while calling ensure_file_open
-            let _ = std::fs::create_dir_all(self.stats_file_path.parent().unwrap());
-            let stats_file = OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&self.stats_file_path)
-                .map_err(|e| libafl::Error::unknown(format!("Failed to open stats file: {}", e)))?;
+        log::debug!(
+            "bench_stats: cpu={} elapsed={:.3}s execs={} cov={:.4}% corpus={}",
+            self.cpu_id,
+            elapsed,
+            total_execs,
+            coverage_pct,
+            corpus_size
+        );
 
-            // Write CSV header if this is the first time
-            if !self.csv_header_written {
-                writeln!(&stats_file, "timestamp,new_coverage_indices").map_err(|e| {
-                    libafl::Error::unknown(format!("Failed to write CSV header: {}", e))
-                })?;
-                self.csv_header_written = true;
-            }
-
-            // Write new coverage data
-            let timestamp = now.duration_since(self.initialised).as_secs();
-            let coverage_str = new_coverage
-                .iter()
-                .map(|i| i.to_string())
-                .collect::<Vec<_>>()
-                .join(";");
-            writeln!(&stats_file, "{},{}", timestamp, coverage_str)
-                .map_err(|e| libafl::Error::unknown(format!("Failed to write CSV data: {}", e)))?;
+        if writeln!(
+            &stats_file,
+            "{:.3},{},{:.2},{:.4},{},{}",
+            elapsed, total_execs, execs_per_sec, coverage_pct, corpus_size, crashes
+        )
+        .is_err()
+        {
+            log::warn!(
+                "bench_stats: cpu={} failed to write CSV data to {}",
+                self.cpu_id,
+                self.stats_file_path.display()
+            );
         }
 
         Ok(())

@@ -116,6 +116,13 @@ pub struct FuzzerOptions {
         help = "Comma-separated list of mutators/generators to enable (if not specified, all are enabled)"
     )]
     pub mutators: Option<Vec<String>>,
+    #[cfg(feature = "bench")]
+    #[arg(
+        long,
+        help = "Benchmark snapshot interval in seconds",
+        default_value_t = 30
+    )]
+    pub bench_snapshot_secs: u64,
 }
 
 impl FuzzerOptions {
@@ -138,6 +145,11 @@ impl FuzzerOptions {
         let mut dir = PathBuf::from(&self.output);
         dir.push("bench");
         dir
+    }
+
+    #[cfg(feature = "bench")]
+    pub fn bench_snapshot_secs(&self) -> u64 {
+        self.bench_snapshot_secs
     }
 
     pub fn queue_dir(&self, core_id: CoreId) -> PathBuf {
