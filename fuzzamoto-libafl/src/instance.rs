@@ -118,6 +118,7 @@ where
         let stdout_observer = StdOutObserver::new(Cow::Borrowed("hprintf_output")).unwrap();
 
         let map_feedback = MaxMapFeedback::new(&trace_observer);
+        let map_feedback_name = map_feedback.name().to_string();
 
         let trace_handle = map_feedback.observer_handle().clone();
 
@@ -125,7 +126,7 @@ where
         let bench_stats_stage = BenchStatsStage::new(
             u32::try_from(self.client_description.core_id().0)
                 .expect("core_id should fit into u32"),
-            trace_handle.clone(),
+            map_feedback_name,
             helper.bitmap_size,
             Duration::from_secs(self.options.bench_snapshot_secs()),
             self.options.bench_dir().join(format!(

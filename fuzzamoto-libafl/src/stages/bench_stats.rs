@@ -15,14 +15,15 @@ use libafl::{
     stages::{Restartable, Stage},
     state::{HasCorpus, HasExecutions, HasSolutions},
 };
-use libafl_bolts::tuples::Handle;
-
 use crate::input::IrInput;
 
-/// Stage for collecting fuzzer stats useful for benchmarking
-pub struct BenchStatsStage<T> {
+/// Stage for collecting fuzzer stats useful for benchmarking.
+///
+/// Note: `feedback_name` must match the name used to register `MapFeedbackMetadata`
+/// (i.e., the feedback's name), which may differ from the observer's name.
+pub struct BenchStatsStage {
     cpu_id: u32,
-    trace_handle: Handle<T>,
+    feedback_name: String,
     map_size: usize,
 
     initialised: Instant,
@@ -35,10 +36,10 @@ pub struct BenchStatsStage<T> {
     csv_header_written: bool,
 }
 
-impl<T> BenchStatsStage<T> {
+impl BenchStatsStage {
     pub fn new(
         cpu_id: u32,
-        trace_handle: Handle<T>,
+        feedback_name: impl Into<String>,
         map_size: usize,
         update_interval: Duration,
         stats_file_path: PathBuf,
@@ -46,7 +47,7 @@ impl<T> BenchStatsStage<T> {
         let last_update = Instant::now() - 2 * update_interval;
         Self {
             cpu_id,
-            trace_handle,
+            feedback_name: feedback_name.into(),
             map_size,
             initialised: Instant::now(),
             last_update,
@@ -58,7 +59,7 @@ impl<T> BenchStatsStage<T> {
     }
 }
 
-impl<T, S> Restartable<S> for BenchStatsStage<T> {
+impl<S> Restartable<S> for BenchStatsStage {
     fn should_restart(&mut self, _state: &mut S) -> Result<bool, libafl::Error> {
         Ok(true)
     }
@@ -68,7 +69,7 @@ impl<T, S> Restartable<S> for BenchStatsStage<T> {
     }
 }
 
-impl<E, EM, S, Z, OT, T> Stage<E, EM, S, Z> for BenchStatsStage<T>
+impl<E, EM, S, Z, OT> Stage<E, EM, S, Z> for BenchStatsStage
 where
     S: HasCorpus<IrInput> + HasExecutions + HasSolutions<IrInput> + HasNamedMetadata,
     E: Executor<EM, IrInput, S, Z> + HasObservers<Observers = OT>,
@@ -93,7 +94,7 @@ where
         // Get cumulative coverage from MapFeedback's metadata
         let covered = state
             .named_metadata_map()
-            .get::<MapFeedbackMetadata<u8>>(self.trace_handle.name())
+            .get::<MapFeedbackMetadata<u8>>(&self.feedback_name)
             .map_or(0, |meta| meta.num_covered_map_indexes);
 
         let coverage_pct = if self.map_size == 0 {
