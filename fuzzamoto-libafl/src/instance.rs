@@ -1,8 +1,9 @@
 use std::{borrow::Cow, cell::RefCell, marker::PhantomData, process, rc::Rc, time::Duration};
 
 use fuzzamoto_ir::{
-    AddTxToBlockGenerator, AddrRelayGenerator, AddrRelayV2Generator, AdvanceTimeGenerator,
-    BlockGenerator, BlockTxnGenerator, BloomFilterAddGenerator, BloomFilterClearGenerator,
+    AddConnectionGenerator, AddConnectionWithHandshakeGenerator, AddTxToBlockGenerator,
+    AddrRelayGenerator, AddrRelayV2Generator, AdvanceTimeGenerator, BlockGenerator,
+    BlockTxnGenerator, BloomFilterAddGenerator, BloomFilterClearGenerator,
     BloomFilterLoadGenerator, CombineMutator, CompactBlockGenerator, CompactFilterQueryGenerator,
     GetAddrGenerator, GetDataGenerator, HeaderGenerator, InputMutator, InventoryGenerator,
     LargeTxGenerator, LongChainGenerator, OneParentOneChildGenerator, OperationMutator, Program,
@@ -370,6 +371,14 @@ where
             (
                 200.0,
                 IrGenerator::new(BlockTxnGenerator::default(), rng.clone())
+            ),
+            (
+                50.0,
+                IrGenerator::new(AddConnectionGenerator::default(), rng.clone())
+            ),
+            (
+                50.0,
+                IrGenerator::new(AddConnectionWithHandshakeGenerator::default(), rng.clone())
             ),
         ];
 

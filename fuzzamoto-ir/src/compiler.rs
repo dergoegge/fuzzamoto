@@ -38,12 +38,24 @@ pub struct Compiler {
 
     variables: Vec<Box<dyn Any>>,
     output: CompiledProgram,
+    connection_counter: usize,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 pub enum CompiledAction {
-    /// Create a new connection
+    /// Create a new connection without handshake
     Connect(usize, String),
+    /// Create a new connection with handshake
+    ConnectAndHandshake {
+        node: usize,
+        connection_type: String,
+        relay: bool,
+        starting_height: i32,
+        wtxidrelay: bool,
+        addrv2: bool,
+        erlay: bool,
+        time: u64,
+    },
     /// Send a message on one of the connections
     SendRawMessage(usize, String, Vec<u8>),
     /// Set mock time for all nodes in the test
@@ -225,6 +237,15 @@ struct AddrListV2 {
     entries: Vec<AddrV2Message>,
 }
 
+#[derive(Clone, Debug)]
+struct HandshakeOpts {
+    relay: bool,
+    starting_height: i32,
+    wtxidrelay: bool,
+    addrv2: bool,
+    erlay: bool,
+}
+
 struct Nop;
 
 impl Compiler {
@@ -242,6 +263,8 @@ impl Compiler {
                 Operation::Probe
             ));
         }
+
+        self.connection_counter = ir.context.num_connections;
 
         for (_, instruction) in ir.instructions.iter().enumerate() {
             let actions_before = self
@@ -274,7 +297,8 @@ impl Compiler {
                 | Operation::LoadTxo { .. }
                 | Operation::LoadFilterLoad { .. }
                 | Operation::LoadFilterAdd { .. }
-                | Operation::LoadNonce(..) => {
+                | Operation::LoadNonce(..)
+                | Operation::LoadHandshakeOpts { .. } => {
                     self.handle_load_operations(&instruction)?;
                 }
 
@@ -368,6 +392,10 @@ impl Compiler {
                     self.handle_bip152_blocktxn_operations(&instruction)?;
                 }
 
+                Operation::AddConnection | Operation::AddConnectionWithHandshake => {
+                    self.handle_new_connection_operations(&instruction)?;
+                }
+
                 Operation::SendRawMessage
                 | Operation::SendTxNoWit
                 | Operation::SendTx
@@ -426,6 +454,7 @@ impl Compiler {
                 actions: Vec::with_capacity(4096),
                 metadata: CompiledMetadata::new(),
             },
+            connection_counter: 0,
         }
     }
 
@@ -1419,6 +1448,21 @@ impl Compiler {
                 self.handle_load_operation(FilterAdd { data: data.clone() });
             }
             Operation::LoadNonce(nonce) => self.handle_load_operation(*nonce),
+            Operation::LoadHandshakeOpts {
+                relay,
+                starting_height,
+                wtxidrelay,
+                addrv2,
+                erlay,
+            } => {
+                self.handle_load_operation(HandshakeOpts {
+                    relay: *relay,
+                    starting_height: *starting_height,
+                    wtxidrelay: *wtxidrelay,
+                    addrv2: *addrv2,
+                    erlay: *erlay,
+                });
+            }
             _ => unreachable!("Non-load operation passed to handle_load_operations"),
         }
         Ok(())
@@ -1482,6 +1526,54 @@ impl Compiler {
             _ => unreachable!("Non probing operation passed to handle_probe_operations"),
         }
 
+        Ok(())
+    }
+
+    fn handle_new_connection_operations(
+        &mut self,
+        instruction: &Instruction,
+    ) -> Result<(), CompilerError> {
+        match &instruction.operation {
+            Operation::AddConnection => {
+                let node_var = self.get_input::<usize>(&instruction.inputs, 0)?;
+                let connection_type_var = self.get_input::<String>(&instruction.inputs, 1)?;
+
+                self.output.actions.push(CompiledAction::Connect(
+                    *node_var,
+                    connection_type_var.clone(),
+                ));
+
+                let connection_id = self.connection_counter;
+                self.connection_counter += 1;
+                self.append_variable(connection_id);
+            }
+            Operation::AddConnectionWithHandshake => {
+                let node_var = self.get_input::<usize>(&instruction.inputs, 0)?;
+                let connection_type_var = self.get_input::<String>(&instruction.inputs, 1)?;
+                let handshake_opts_var = self.get_input::<HandshakeOpts>(&instruction.inputs, 2)?;
+                let time_var = self.get_input::<u64>(&instruction.inputs, 3)?;
+
+                self.output
+                    .actions
+                    .push(CompiledAction::ConnectAndHandshake {
+                        node: *node_var,
+                        connection_type: connection_type_var.clone(),
+                        relay: handshake_opts_var.relay,
+                        starting_height: handshake_opts_var.starting_height,
+                        wtxidrelay: handshake_opts_var.wtxidrelay,
+                        addrv2: handshake_opts_var.addrv2,
+                        erlay: handshake_opts_var.erlay,
+                        time: *time_var,
+                    });
+
+                let connection_id = self.connection_counter;
+                self.connection_counter += 1;
+                self.append_variable(connection_id);
+            }
+            _ => {
+                unreachable!("Non-connection operation passed to handle_new_connection_operations")
+            }
+        }
         Ok(())
     }
 

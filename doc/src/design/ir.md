@@ -166,6 +166,7 @@ containing the correctly serialized transactions `v15` and `v30`.
 | `LoadNode` | Loads an index for one of the test nodes. |
 | `LoadConnection`| Loads an index for one of the p2p connections. |
 | `LoadConnectionType`| Loads a connection type string. |
+| `LoadHandshakeOpts` | Loads handshake parameters for a new connection. |
 | `LoadDuration` | Loads a time duration. |
 | `LoadTime` | Loads a timestamp. |
 | `LoadAmount` | Loads a bitcoin amount. |
@@ -183,6 +184,9 @@ containing the correctly serialized transactions `v15` and `v30`.
 | `LoadNonce` | Loads a nonce. |
 | `LoadFilterLoad` | Loads a filter for `filterload` message. |
 | `LoadFilterAdd` | Loads data for `filteradd` message. |
+| **Connection operations** | **Manage p2p connections.** |
+| `AddConnection` | Creates a new p2p connection to a node. |
+| `AddConnectionWithHandshake` | Creates a new p2p connection and performs a handshake. |
 | **Time operations** | **Manipulate the mock time.** |
 | `AdvanceTime` | Advances time by a given duration. |
 | `SetTime` | Sets the mock time to a specific value. |
@@ -278,6 +282,7 @@ fuzzing campaign. The following generators are available:
 - `SendMessageGenerator`: Generates a new `SendRawMessage` instruction
 - `AdvanceTimeGenerator`: Generates new `AdvanceTime` and `SetTime`
   instructions
+- `AddConnectionGenerator`: Generates instructions to create new p2p connections
 - `CompactFilterQueryGenerator`: Generates new `SendGetCFilters`,
   `SendGetCFHeaders` and `SendGetCFCheckpt` instructions
 - `BlockGenerator`: Generates instructions to build a block

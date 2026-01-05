@@ -301,6 +301,25 @@ impl<R: RngCore, M: OperationByteMutator> Mutator<R> for OperationMutator<M> {
                 self.byte_array_mutator.mutate_bytes(bytes);
                 Operation::LoadBytes(bytes.clone()) // TODO this clone is not needed
             }
+            Operation::LoadHandshakeOpts {
+                relay,
+                starting_height,
+                wtxidrelay,
+                addrv2,
+                erlay,
+            } => Operation::LoadHandshakeOpts {
+                relay: if rng.gen_bool(0.5) { !*relay } else { *relay },
+                starting_height: *[0, 1, 100, 200, *starting_height, rng.gen_range(0..400)]
+                    .choose(rng)
+                    .unwrap(),
+                wtxidrelay: if rng.gen_bool(0.5) {
+                    !*wtxidrelay
+                } else {
+                    *wtxidrelay
+                },
+                addrv2: if rng.gen_bool(0.5) { !*addrv2 } else { *addrv2 },
+                erlay: if rng.gen_bool(0.5) { !*erlay } else { *erlay },
+            },
             op => op.clone(),
         };
 

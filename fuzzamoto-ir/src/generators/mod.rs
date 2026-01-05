@@ -1,3 +1,4 @@
+pub mod add_connection;
 pub mod address;
 pub mod advance_time;
 pub mod block;
@@ -12,6 +13,7 @@ pub mod tx;
 pub mod txo;
 pub mod witness;
 
+pub use add_connection::*;
 pub use address::*;
 pub use advance_time::*;
 pub use block::*;
