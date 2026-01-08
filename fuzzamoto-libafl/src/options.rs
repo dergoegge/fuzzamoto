@@ -89,7 +89,7 @@ pub struct FuzzerOptions {
         long,
         help = "Number of corpus entries cached in memory",
         env = "FUZZAMOTO_CORPUS_CACHE",
-        default_value_t = 100
+        default_value_t = 5000
     )]
     pub corpus_cache: usize,
 
