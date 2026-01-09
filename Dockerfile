@@ -106,6 +106,9 @@ RUN cmake --build bitcoin/build_fuzz -j$(nproc) --target bitcoind
 ENV CC=clang-${LLVM_V}
 ENV CXX=clang++-${LLVM_V}
 
+# For CI jobs
+COPY ./tests /tests
+
 WORKDIR /fuzzamoto/fuzzamoto-nyx-sys
 COPY ./fuzzamoto-nyx-sys/Cargo.toml .
 COPY ./fuzzamoto-nyx-sys/src/ src/
