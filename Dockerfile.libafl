@@ -92,6 +92,17 @@ COPY ./target-patches/bitcoin-core-aggressive-rng.patch bitcoin/
 RUN cd bitcoin/ && \
       git apply bitcoin-core-aggressive-rng.patch
 
+ARG BUG_PATCH
+
+COPY ./bugs /bugs
+RUN cd bitcoin/ && \
+    if [ -n "${BUG_PATCH}" ]; then \
+        patch_path="/bugs/${BUG_PATCH}/bug.diff"; \
+        test -f "${patch_path}"; \
+        git apply "${patch_path}" || exit 1; \
+    fi
+RUN cd bitcoin/ && git diff && echo ${BUG_PATCH}
+
 RUN cd bitcoin/ && cmake -B build_fuzz \
       --toolchain ./depends/$(./depends/config.guess)/toolchain.cmake \
       -DSANITIZERS="address" \
