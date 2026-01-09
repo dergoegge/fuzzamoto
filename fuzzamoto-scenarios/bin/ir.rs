@@ -2,10 +2,12 @@
 use std::time::{Duration, Instant};
 
 use bitcoin::{bip152::BlockTransactionsRequest, consensus::Decodable, hashes::Hash};
+
 use fuzzamoto::{
     connections::Transport,
     fuzzamoto_main,
     oracles::{CrashOracle, Oracle, OracleResult},
+    runners::Runner,
     scenarios::{Scenario, ScenarioInput, ScenarioResult, generic::GenericScenario},
     targets::{BitcoinCoreTarget, ConnectableTarget, HasBlockChainInterface, Target},
 };
@@ -266,14 +268,19 @@ where
         Ok(())
     }
 
-    fn process_actions(&mut self, mut program: CompiledProgram) {
+    fn process_actions(
+        &mut self,
+        program: CompiledProgram,
+        start_index: usize,
+        runner: &dyn Runner,
+    ) -> Option<(Vec<u8>, usize)> {
         let message_filter = |(s, _): &(String, Vec<u8>)| ["getblocktxn"].contains(&s.as_str());
         let mut non_probe_action_count = 0;
-        for action in program.actions.drain(..) {
+        for (i, action) in program.actions.into_iter().enumerate().skip(start_index) {
             match action {
                 CompiledAction::SendRawMessage(from, command, message) => {
                     if self.inner.connections.is_empty() {
-                        return;
+                        return None;
                     }
                     let num_connections = self.inner.connections.len();
                     let dst = from % num_connections;
@@ -311,9 +318,17 @@ where
                     let _ = self.second.set_mocktime(time);
                     non_probe_action_count += 1;
                 }
+                CompiledAction::IncrementalSnapshot => {
+                    // If we're creating a new temporary snapshot, we want to save the index to skip
+                    // ahead to.
+                    let prefix_index = i + 1;
+                    let (new_payload, action_pos) = runner.create_tmp_and_next(prefix_index);
+                    return Some((new_payload, action_pos));
+                }
                 _ => {}
             }
         }
+        None
     }
 
     fn print_received(&mut self) {
@@ -448,9 +463,33 @@ where
         })
     }
 
-    fn run(&mut self, testcase: TestCase) -> ScenarioResult {
+    fn run(&mut self, testcase: TestCase, runner: &dyn Runner) -> ScenarioResult {
         let metadata = testcase.program.metadata.clone();
-        self.process_actions(testcase.program);
+        let mut program = testcase.program;
+        let mut start_index = 0;
+
+        loop {
+            match self.process_actions(program, start_index, runner) {
+                Some((new_payload, action_pos)) => {
+                    let new_testcase = match TestCase::decode(&new_payload) {
+                        Ok(tc) => tc,
+                        Err(e) => {
+                            log::warn!("Failed to decode new payload after TMP: {}", e);
+                            runner.skip();
+                            return ScenarioResult::Skip;
+                        }
+                    };
+
+                    // Resume just after the snapshot prefix.
+                    program = new_testcase.program;
+                    start_index = action_pos;
+                }
+                None => {
+                    break;
+                }
+            }
+        }
+
         self.ping_connections();
 
         if self.recording_received_messages {
