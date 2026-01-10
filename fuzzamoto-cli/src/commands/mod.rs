@@ -1,4 +1,5 @@
 pub mod coverage;
+pub mod coverage_batch;
 pub mod init;
 pub mod ir;
 
