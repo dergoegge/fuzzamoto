@@ -16,6 +16,7 @@ use libafl::{
 use libafl_bolts::{impl_serdeany, tuples::Handle};
 use num_traits::Bounded;
 use serde::{Deserialize, Serialize};
+use std::io::Write;
 use std::{borrow::Cow, collections::HashSet, fmt::Debug};
 
 use crate::input::IrInput;
@@ -28,6 +29,7 @@ const CAL_STAGE_MAX: usize = 8;
 pub struct UnstableEntriesMetadata {
     unstable_entries: HashSet<usize>,
     filled_entries_count: usize,
+    unstable_tc_path: Vec<String>,
 }
 impl_serdeany!(UnstableEntriesMetadata);
 
@@ -38,6 +40,7 @@ impl UnstableEntriesMetadata {
         Self {
             unstable_entries: HashSet::new(),
             filled_entries_count: 0,
+            unstable_tc_path: Vec::new(),
         }
     }
 }
@@ -83,19 +86,47 @@ pub struct StabilityCheckStage<C, O, OT, S> {
     map_observer_handle: Handle<C>,
     map_name: Cow<'static, str>,
     stage_max: usize,
+    unstable_stats: std::path::PathBuf,
+    unstable_testcases: Vec<String>,
     seen: HashSet<CorpusId>,
     phantom: PhantomData<(O, OT, S)>,
 }
 
 impl<C, O, OT, S> StabilityCheckStage<C, O, OT, S> {
-    pub fn new(observer_handle: &Handle<C>, map_name: &str, stage_max: usize) -> Self {
+    pub fn new(
+        observer_handle: &Handle<C>,
+        map_name: &str,
+        stage_max: usize,
+        unstable_stats: &std::path::PathBuf,
+    ) -> Self {
         Self {
             map_observer_handle: observer_handle.clone(),
             map_name: Cow::Owned(map_name.to_owned()),
             stage_max,
+            unstable_stats: unstable_stats.clone(),
+            unstable_testcases: Vec::new(),
             seen: HashSet::new(),
             phantom: PhantomData,
         }
+    }
+
+    pub fn write_unstable_stats(&self) -> Result<(), Error> {
+        let mut tmp = std::path::PathBuf::from(self.unstable_stats.clone());
+        tmp.set_extension(".tmp");
+
+        let file = std::fs::File::create(&tmp)?;
+        let mut writer = std::io::BufWriter::new(file);
+
+        for line in &self.unstable_testcases {
+            writeln!(writer, "{}", line)?;
+        }
+
+        writer.flush()?;
+        drop(writer);
+
+        std::fs::rename(tmp, self.unstable_stats.clone())?;
+
+        Ok(())
     }
 }
 
@@ -131,6 +162,7 @@ where
         if self.seen.contains(&cur) {
             return Ok(());
         }
+        self.seen.insert(cur);
 
         let mut iter = self.stage_max;
 
@@ -210,9 +242,13 @@ where
 
         let mut send_default_stability = false;
         let unstable_found = !unstable_entries.is_empty();
+        let path = state.current_testcase()?.file_path().to_owned();
         if unstable_found {
             let metadata = state.metadata_or_insert_with(UnstableEntriesMetadata::new);
-
+            if let Some(p) = path {
+                self.unstable_testcases
+                    .push(p.file_name().unwrap().to_string_lossy().to_string());
+            }
             // If we see new unstable entries executing this new corpus entries, then merge with the existing one
             for item in unstable_entries {
                 metadata.unstable_entries.insert(item); // Insert newly found items
@@ -261,6 +297,10 @@ where
                     *state.executions(),
                 ),
             )?;
+        }
+
+        if unstable_found {
+            self.write_unstable_stats()?;
         }
 
         Ok(())

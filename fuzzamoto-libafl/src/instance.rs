@@ -430,7 +430,12 @@ where
         let continue_minimizing = RefCell::new(1u64);
 
         let probing = ProbingStage::new(&stdout_observer_handle);
-        let stability = StabilityCheckStage::new(&map_observer_handle, &map_feedback_name, 8);
+        let stability_path = self
+            .options
+            .output_dir(self.client_description.core_id())
+            .join("unstable_testcases.txt");
+        let stability =
+            StabilityCheckStage::new(&map_observer_handle, &map_feedback_name, 8, &stability_path);
         let mut stages = tuple_list!(
             ClosureStage::new(|_a: &mut _, _b: &mut _, _c: &mut _, _d: &mut _| {
                 // Always try minimizing at least for one pass
