@@ -216,7 +216,7 @@ where
         let is_first = rt_data.mutation_idx() == 0;
         rt_data.increment_idx();
 
-        let tc_data = if is_first
+        let mut tc_data = if is_first
             && let Some(id) = current_id
             && let Some(meta) = rt_data.metadata_mut(id)
         {
@@ -227,7 +227,7 @@ where
 
         let Some(index) =
             self.generator
-                .choose_index(input.ir(), &mut self.rng, tc_data.as_deref())
+                .choose_index(input.ir(), &mut self.rng, tc_data.as_deref_mut())
         else {
             return Ok(MutationResult::Skipped);
         };

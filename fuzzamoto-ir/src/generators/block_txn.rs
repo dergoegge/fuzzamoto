@@ -123,7 +123,7 @@ impl<R: RngCore> Generator<R> for BlockTxnGenerator {
         &self,
         program: &crate::Program,
         rng: &mut R,
-        meta: Option<&PerTestcaseMetadata>,
+        meta: Option<&mut PerTestcaseMetadata>,
     ) -> Option<usize> {
         if let Some(meta) = meta
             && !meta.block_txn_request().is_empty()

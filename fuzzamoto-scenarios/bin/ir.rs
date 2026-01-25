@@ -31,7 +31,7 @@ use fuzzamoto::oracles::{NetSplitContext, NetSplitOracle};
 use fuzzamoto::oracles::{ConsensusContext, ConsensusOracle};
 
 use fuzzamoto_ir::{
-    ProbeResult, ProbeResults, Program, ProgramContext, RecentBlock,
+    MempoolTxo, ProbeResult, ProbeResults, Program, ProgramContext, RecentBlock,
     compiler::{CompiledAction, CompiledMetadata, CompiledProgram, Compiler},
 };
 
@@ -339,6 +339,34 @@ where
         }
     }
 
+    fn print_mempool(&mut self, meta: &CompiledMetadata) {
+        let query = self.inner.target.get_mempool_entries();
+        if let Ok(mempool) = query {
+            let mut ret = Vec::new();
+            for tx in mempool {
+                let txid = tx.txid();
+                let definition = if let Some(txo) = meta.txo_variables(*txid)
+                    && let Some(inst) = meta.variable_indices().get(*txo)
+                {
+                    (*txo, *inst)
+                } else {
+                    continue;
+                };
+
+                let txo_entry = MempoolTxo {
+                    txid: *txid,
+                    definition: definition,
+                    spentby: tx.spentby().to_vec(),
+                    depends: tx.depends().to_vec(),
+                };
+
+                ret.push(txo_entry);
+            }
+            self.probe_results
+                .push(ProbeResult::Mempool { txo_entry: ret });
+        }
+    }
+
     fn evaluate_oracles(&mut self) -> ScenarioResult {
         let crash_oracle = CrashOracle::<TX>::default();
         if let OracleResult::Fail(e) = crash_oracle.evaluate(&mut self.inner.target) {
@@ -469,6 +497,7 @@ where
             if let Some(ret) = probe_recent_block_hashes(&self.inner.target, &metadata) {
                 self.probe_results.push(ret);
             }
+            self.print_mempool(&metadata);
         }
 
         self.print_received();
