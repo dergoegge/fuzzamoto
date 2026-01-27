@@ -24,3 +24,27 @@ docker run --privileged -it \
     fuzzamoto-coverage \
     /fuzzamoto/target/release/scenario-$SCENARIO
 ```
+
+# Parrallellize coverage measurement
+Generating coverage reports is often time-consuming.
+In that case, you can benefit from parallelizing the coverage measurement.
+To use it, first, you need to build the images defined in both `Dockerfile.coverage` and `Dockerfile.coverage.generic`.
+
+```bash
+docker build -f Dockerfile.coverage -t fuzzamoto-coverage .
+docker build -f Dockerfile.coverage.generic -t fuzzamoto-coverage-generic .
+```
+
+After those images are built, copy the image ID from `fuzzamoto-coverage-generic`.
+
+```bash
+docker images | grep fuzzamoto-libafl-generic
+```
+
+Lastly, you can run this command to run the `coverage-batch` command for parallelized coverage measurement
+
+```bash
+cargo run -p fuzzamoto-cli -- coverage-batch --output ./output --corpus ./corpus --docker-image <image id built from Docker.coverage.generic>
+```
+
+This command will use all CPUs available, providing you a significant speedup for covearge measurement.
