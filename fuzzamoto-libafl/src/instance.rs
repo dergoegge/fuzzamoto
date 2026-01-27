@@ -51,7 +51,10 @@ use crate::{
     mutators::{IrGenerator, IrMutator, IrSpliceMutator, LibAflByteMutator},
     options::FuzzerOptions,
     schedulers::SupportedSchedulers,
-    stages::{IrMinimizerStage, ProbingStage, StabilityCheckStage, VerifyTimeoutsStage},
+    stages::{
+        IncrementalSnapshotStage, IrMinimizerStage, ProbingStage, SnapshotPlacementPolicy,
+        StabilityCheckStage, VerifyTimeoutsStage,
+    },
 };
 
 #[cfg(feature = "bench")]
@@ -436,6 +439,14 @@ where
 
         let probing = ProbingStage::new(&stdout_observer_handle);
         let stability = StabilityCheckStage::new(&map_observer_handle, &map_feedback_name, 8);
+
+        // Set iterations to 1 so that each tmp snapshot is used for exactly max_reuse_count iterations
+        let mutation_stage = TuneableMutationalStage::new(&mut state, mutator);
+        mutation_stage.set_iters(&mut state, 1)?;
+
+        let incremental_snapshot_stage =
+            IncrementalSnapshotStage::new(mutation_stage, SnapshotPlacementPolicy::Balanced, 50);
+
         let mut stages = tuple_list!(
             ClosureStage::new(|_a: &mut _, _b: &mut _, _c: &mut _, _d: &mut _| {
                 // Always try minimizing at least for one pass
@@ -443,8 +454,12 @@ where
                 Ok(())
             }),
             WhileStage::new(
-                |_, _, _, _| Ok((!self.options.static_corpus || minimizing_crash)
-                    && *continue_minimizing.borrow() > 0),
+                |_, executor: &mut NyxExecutor<_, _>, _, _| {
+                    let qemu_has_tmp = executor.helper.nyx_process.aux_tmp_snapshot_created();
+                    Ok((!self.options.static_corpus || minimizing_crash)
+                        && *continue_minimizing.borrow() > 0
+                        && !qemu_has_tmp)
+                },
                 tuple_list!(
                     ClosureStage::new(|_a: &mut _, _b: &mut _, _c: &mut _, _d: &mut _| {
                         // Reset the minimization counter
@@ -471,11 +486,16 @@ where
                     ),
                 )
             ),
-            stability,
-            probing,
+            IfStage::new(
+                |_, executor: &mut NyxExecutor<_, _>, _, _| Ok(!executor
+                    .helper
+                    .nyx_process
+                    .aux_tmp_snapshot_created()),
+                tuple_list!(stability, probing)
+            ),
             IfStage::new(
                 |_, _, _, _| Ok(self.options.minimize_input.is_none()),
-                tuple_list!(TuneableMutationalStage::new(&mut state, mutator))
+                tuple_list!(incremental_snapshot_stage)
             ),
             timeout_verify_stage,
             bench_stats_stage,
