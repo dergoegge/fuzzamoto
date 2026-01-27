@@ -1,0 +1,13 @@
+diff --git a/src/script/interpreter.cpp b/src/script/interpreter.cpp
+index ca405c2..3f251a8 100644
+--- a/src/script/interpreter.cpp
++++ b/src/script/interpreter.cpp
+@@ -410,7 +410,7 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript&
+     static const CScriptNum bnOne(1);
+     // static const CScriptNum bnFalse(0);
+     // static const CScriptNum bnTrue(1);
+-    static const valtype vchFalse(0);
++    static const valtype vchFalse(1, 0);
+     // static const valtype vchZero(0);
+     static const valtype vchTrue(1, 1);
+ 
