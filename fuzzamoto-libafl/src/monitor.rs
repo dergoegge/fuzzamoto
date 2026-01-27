@@ -67,6 +67,36 @@ where
             .aggregated()
             .get("stability")
             .map_or("100%".to_string(), |c| c.to_string());
+
+        let crash = client_stats_manager
+            .aggregated()
+            .get("CRASH")
+            .map_or("0".to_string(), |c| c.to_string());
+        let blocktemplate = client_stats_manager
+            .aggregated()
+            .get("BLOCKTEMPLATE")
+            .map_or("0".to_string(), |c| c.to_string());
+        let inflation = client_stats_manager
+            .aggregated()
+            .get("INFLATION")
+            .map_or("0".to_string(), |c| c.to_string());
+        let netsplit = client_stats_manager
+            .aggregated()
+            .get("NETSPLIT")
+            .map_or("0".to_string(), |c| c.to_string());
+        let consensus = client_stats_manager
+            .aggregated()
+            .get("CONSENSUS")
+            .map_or("0".to_string(), |c| c.to_string());
+        let other = client_stats_manager
+            .aggregated()
+            .get("OTHER")
+            .map_or("0".to_string(), |c| c.to_string());
+        let timeout = client_stats_manager
+            .aggregated()
+            .get("timeout")
+            .map_or("0".to_string(), |c| c.to_string());
+
         let global_stats = client_stats_manager.global_stats();
 
         let event = match event_msg {
@@ -97,9 +127,47 @@ where
             _ => Some(event_msg),
         };
 
+        let bugs_str = if global_stats.objective_size > 0 {
+            let mut bug_details = Vec::new();
+
+            if crash != "0" {
+                bug_details.push(format!("{}d", crash));
+            }
+            if blocktemplate != "0" {
+                bug_details.push(format!("{}b", blocktemplate));
+            }
+            if inflation != "0" {
+                bug_details.push(format!("{}i", inflation));
+            }
+            if netsplit != "0" {
+                bug_details.push(format!("{}n", netsplit));
+            }
+            if consensus != "0" {
+                bug_details.push(format!("{}c", consensus));
+            }
+            if other != "0" {
+                bug_details.push(format!("{}o", other));
+            }
+            if timeout != "0" {
+                bug_details.push(format!("{}h", timeout));
+            }
+
+            if bug_details.is_empty() {
+                format!("bugs: {}", global_stats.objective_size)
+            } else {
+                format!(
+                    "bugs: {} ({})",
+                    global_stats.objective_size,
+                    bug_details.join(" /")
+                )
+            }
+        } else {
+            format!("bugs: {}", global_stats.objective_size)
+        };
+
         if let Some(event) = event {
             let fmt = format!(
-                "{} time: {} (x{}) execs: {} cov: {} corpus: {} exec/sec: {} bugs: {} stability: {}",
+                "{} time: {} (x{}) execs: {} cov: {} corpus: {} exec/sec: {} stability: {} {}",
                 event,
                 global_stats.run_time_pretty,
                 global_stats.client_stats_count,
@@ -107,8 +175,8 @@ where
                 trace,
                 global_stats.corpus_size,
                 global_stats.execs_per_sec_pretty,
-                global_stats.objective_size,
                 stability,
+                bugs_str
             );
             (self.log_fn)(&fmt);
         }

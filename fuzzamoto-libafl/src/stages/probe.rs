@@ -1,5 +1,4 @@
 use crate::input::IrInput;
-use core::marker::PhantomData;
 use fuzzamoto_ir::{Instruction, Operation};
 use fuzzamoto_ir::{ProbeResult, ProbeResults};
 use libafl::ExecutesInput;
@@ -21,7 +20,6 @@ use serde::{Deserialize, Serialize};
 pub struct ProbingStage<T> {
     seen: HashSet<CorpusId>,
     handle: Handle<T>,
-    phantom: PhantomData<T>,
 }
 
 impl<T> ProbingStage<T> {
@@ -29,7 +27,6 @@ impl<T> ProbingStage<T> {
         Self {
             seen: HashSet::new(),
             handle: observer_handle.clone(),
-            phantom: PhantomData,
         }
     }
 }

@@ -46,7 +46,7 @@ use rand::{SeedableRng, rngs::SmallRng};
 use typed_builder::TypedBuilder;
 
 use crate::{
-    feedbacks::CaptureTimeoutFeedback,
+    feedbacks::{CaptureTimeoutFeedback, CrashCauseFeedback},
     input::IrInput,
     mutators::{IrGenerator, IrMutator, IrSpliceMutator, LibAflByteMutator},
     options::FuzzerOptions,
@@ -183,8 +183,10 @@ where
         );
 
         let enable_capture_timeouts = Rc::new(RefCell::new(true));
-        let capture_timeout_feedback =
-            CaptureTimeoutFeedback::new(Rc::clone(&enable_capture_timeouts));
+        let capture_timeout_feedback = CaptureTimeoutFeedback::new(
+            Rc::clone(&enable_capture_timeouts),
+            &self.options.crashes_dir(self.client_description.core_id()),
+        );
         let timeout_verify_stage = IfStage::new(
             |_, _, _, _| Ok(!self.options.ignore_hangs),
             tuple_list!(VerifyTimeoutsStage::new(
@@ -197,7 +199,13 @@ where
         // A feedback to choose if an input is a solution or not
         let mut objective = feedback_and!(
             feedback_or_fast!(
-                CrashFeedback::new(),
+                feedback_or!(
+                    CrashFeedback::new(),
+                    CrashCauseFeedback::new(
+                        stdout_observer_handle.clone(),
+                        &self.options.crashes_dir(self.client_description.core_id())
+                    )
+                ),
                 feedback_and!(
                     ConstFeedback::new(!self.options.ignore_hangs),
                     capture_timeout_feedback,

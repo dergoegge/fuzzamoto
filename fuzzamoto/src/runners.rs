@@ -69,6 +69,9 @@ impl Runner for NyxRunner {
     fn fail(&self, message: &str) {
         let c_message = std::ffi::CString::new(message).unwrap_or_default();
         unsafe {
+            // this println is necessary as libafl doesn't have the ability to read the message if we print it through nyx_fail
+            // therefore we can only use nyx_println to print the message and receive it through `stdout` buffer of `NyxExecutor`
+            nyx_println(c_message.as_ptr(), c_message.count_bytes());
             nyx_fail(c_message.as_ptr());
         }
     }

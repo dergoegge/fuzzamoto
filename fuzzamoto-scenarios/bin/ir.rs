@@ -342,14 +342,14 @@ where
     fn evaluate_oracles(&mut self) -> ScenarioResult {
         let crash_oracle = CrashOracle::<TX>::default();
         if let OracleResult::Fail(e) = crash_oracle.evaluate(&mut self.inner.target) {
-            return ScenarioResult::Fail(e.to_string());
+            return ScenarioResult::Fail(format!("CRASH: CRASH; {}", e));
         }
 
         #[cfg(feature = "oracle_blocktemplate")]
         {
             let template_oracle = BlockTemplateOracle::<TX>::default();
             if let OracleResult::Fail(e) = template_oracle.evaluate(&mut self.inner.target) {
-                return ScenarioResult::Fail(e.to_string());
+                return ScenarioResult::Fail(format!("CRASH: BLOCKTEMPLATE; {}", e));
             }
         }
 
@@ -357,7 +357,7 @@ where
         {
             let inflation_oracle = InflationOracle::<TX>::default();
             if let OracleResult::Fail(e) = inflation_oracle.evaluate(&mut self.inner.target) {
-                return ScenarioResult::Fail(e.to_string());
+                return ScenarioResult::Fail(format!("CRASH: INFLATION; {}", e));
             }
         }
 
@@ -368,7 +368,7 @@ where
                 primary: &self.inner.target,
                 reference: &self.second,
             }) {
-                return ScenarioResult::Fail(format!("{}", e));
+                return ScenarioResult::Fail(format!("CRASH: NETSPLIT; {}", e));
             }
         }
 
@@ -390,7 +390,7 @@ where
                 poll_interval: Duration::from_millis(10),
                 futurest: self.futurest,
             }) {
-                return ScenarioResult::Fail(format!("{}", e));
+                return ScenarioResult::Fail(format!("CRASH: CONSENSUS; {}", e));
             }
         }
 
