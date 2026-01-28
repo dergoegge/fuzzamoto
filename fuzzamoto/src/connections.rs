@@ -270,6 +270,7 @@ pub struct Connection<T: Transport> {
     connection_type: ConnectionType,
     transport: T,
     ping_counter: u64,
+    handshake_complete: bool,
 }
 
 impl<T: Transport> Connection<T> {
@@ -289,7 +290,13 @@ impl<T: Transport> Connection<T> {
             connection_type,
             transport,
             ping_counter: 0,
+            handshake_complete: false,
         }
+    }
+
+    /// Returns whether the version handshake has been completed on this connection.
+    pub fn is_handshake_complete(&self) -> bool {
+        self.handshake_complete
     }
 }
 
@@ -339,6 +346,11 @@ impl<T: Transport> Connection<T> {
     }
 
     pub fn ping(&mut self) -> Result<(), String> {
+        // Skip ping sync on connections that haven't completed the handshake
+        // to avoid hanging indefinitely
+        if !self.handshake_complete {
+            return Ok(());
+        }
         self.ping_counter += 1;
         self.send_ping(self.ping_counter)?;
         self.wait_for_pong(self.ping_counter, false)?;
@@ -351,6 +363,11 @@ impl<T: Transport> Connection<T> {
         recording: bool,
     ) -> Result<Vec<(String, Vec<u8>)>, String> {
         self.transport.send(message)?;
+
+        if !self.handshake_complete {
+            return Ok(vec![]);
+        }
+
         // Sending two pings back-to-back, requires that the node calls `ProcessMessage` twice, and
         // thus ensures `SendMessages` must have been called at least once
         self.send_ping(0x0)?;
@@ -419,6 +436,7 @@ impl<T: Transport> Connection<T> {
             }
         }
 
+        self.handshake_complete = true;
         Ok(())
     }
 }

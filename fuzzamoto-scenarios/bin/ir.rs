@@ -1,7 +1,12 @@
 #[cfg(any(feature = "oracle_netsplit", feature = "oracle_consensus"))]
 use std::time::{Duration, Instant};
 
-use bitcoin::{bip152::BlockTransactionsRequest, consensus::Decodable, hashes::Hash};
+use bitcoin::{
+    bip152::BlockTransactionsRequest,
+    consensus::{Decodable, encode},
+    hashes::Hash,
+    p2p::{message::NetworkMessage, message_compact_blocks::SendCmpct},
+};
 use fuzzamoto::{
     connections::Transport,
     fuzzamoto_main,
@@ -274,6 +279,62 @@ where
         let mut non_probe_action_count = 0;
         for action in program.actions.drain(..) {
             match action {
+                CompiledAction::Connect(_node, connection_type) => {
+                    let conn_type = match connection_type.as_str() {
+                        "inbound" => fuzzamoto::connections::ConnectionType::Inbound,
+                        "outbound" => fuzzamoto::connections::ConnectionType::Outbound,
+                        _ => continue,
+                    };
+
+                    if let Ok(connection) = self.inner.target.connect(conn_type) {
+                        self.inner.connections.push(connection);
+                    }
+                    non_probe_action_count += 1;
+                }
+                CompiledAction::ConnectAndHandshake {
+                    node: _,
+                    connection_type,
+                    relay,
+                    starting_height,
+                    wtxidrelay,
+                    addrv2,
+                    erlay,
+                    time,
+                    send_compact,
+                } => {
+                    let conn_type = match connection_type.as_str() {
+                        "inbound" => fuzzamoto::connections::ConnectionType::Inbound,
+                        "outbound" => fuzzamoto::connections::ConnectionType::Outbound,
+                        _ => continue,
+                    };
+
+                    let handshake_opts = fuzzamoto::connections::HandshakeOpts {
+                        time: time as i64,
+                        relay,
+                        starting_height,
+                        wtxidrelay,
+                        addrv2,
+                        erlay,
+                    };
+
+                    if let Ok(mut connection) = self.inner.target.connect(conn_type) {
+                        if connection.version_handshake(handshake_opts).is_ok() {
+                            if let Some(send_compact) = send_compact {
+                                let sendcmpct = NetworkMessage::SendCmpct(SendCmpct {
+                                    version: 2,
+                                    send_compact,
+                                });
+                                let _ = connection.send(&(
+                                    "sendcmpct".to_string(),
+                                    encode::serialize(&sendcmpct),
+                                ));
+                            }
+
+                            self.inner.connections.push(connection);
+                        }
+                    }
+                    non_probe_action_count += 1;
+                }
                 CompiledAction::SendRawMessage(from, command, message) => {
                     if self.inner.connections.is_empty() {
                         return;
@@ -317,7 +378,6 @@ where
 
                     self.futurest = std::cmp::max(self.futurest, time);
                 }
-                _ => {}
             }
         }
     }
