@@ -34,13 +34,23 @@ impl<R: RngCore, M: OperationByteMutator> Mutator<R> for OperationMutator<M> {
         &mut self,
         program: &mut Program,
         rng: &mut R,
+        meta: Option<&PerTestcaseMetadata>,
+    ) -> MutatorResult {
+        self.mutate_from(program, rng, meta, 0)
+    }
+
+    fn mutate_from(
+        &mut self,
+        program: &mut Program,
+        rng: &mut R,
         _meta: Option<&PerTestcaseMetadata>,
+        min_index: usize,
     ) -> MutatorResult {
         let Some(candidate_instruction) = program
             .instructions
             .iter_mut()
             .enumerate()
-            .filter(|(_, instr)| instr.is_operation_mutable())
+            .filter(|(i, instr)| *i >= min_index && instr.is_operation_mutable())
             .choose(rng)
         else {
             return Err(super::MutatorError::NoMutationsAvailable);
