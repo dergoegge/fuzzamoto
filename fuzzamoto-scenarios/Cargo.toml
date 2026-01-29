@@ -9,6 +9,7 @@ repository.workspace = true
 [features]
 fuzz = ["compile_in_vm", "force_send_and_ping", "nyx"]
 reproduce = ["compile_in_vm", "force_send_and_ping", "fuzzamoto/reproduce"]
+nyx_log = ["nyx"]
 
 nyx = ["dep:fuzzamoto-nyx-sys"]
 compile_in_vm = []

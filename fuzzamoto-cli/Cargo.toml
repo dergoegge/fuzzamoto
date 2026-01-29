@@ -9,6 +9,9 @@ repository.workspace = true
 [lints]
 workspace = true
 
+[features]
+nyx_log = []
+
 [dependencies]
 clap = { version = "4.4", features = ["derive", "string"] }
 env_logger = "0.11.6"
