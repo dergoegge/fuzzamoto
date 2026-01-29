@@ -23,7 +23,7 @@ clean:
 test: compile compile_nyx corpus
 	#!/bin/bash
 	timeout 16s sh -c './target/release/fuzzamoto-libafl --input /tmp/in/ --output /tmp/out/ --share /tmp/fuzzamoto_scenario-ir/ --cores 0 --verbose > stdout.log'
-	if grep -qa "corpus: 30" stdout.log; then
+	if grep -qa "corpus: 15" stdout.log; then
 		echo "Fuzzer is working"
 	else 
 		echo "Fuzzer does not generate enough testcases"

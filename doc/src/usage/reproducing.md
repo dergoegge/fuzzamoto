@@ -15,10 +15,17 @@ inherit stdout from the target application, such that any logs, stack traces,
 etc. are printed to the terminal.
 
 
-## `http-server` example
+## `http-server` example (Out-of-VM execution)
 
-Run the scneario with the input supplied through `stdin` and pass the right
+You can just run the scenario directly to debug the out-of-vm execution of the scenario
 `bitcoind` binary:
+
+First, compile the scenario with `reproduce` features
+```
+cargo build --release -p fuzzamoto-scenarios --features "fuzzamoto/reproduce","force_send_and_ping"
+```
+
+Then, run the scneario with the input supplied through `stdin` and pass the right
 
 ```
 cat ./testcase.dat | RUST_LOG=info ./target/release/scenario-http-server ./bitcoind
@@ -30,6 +37,44 @@ Or alternatively using `FUZZAMOTO_INPUT`:
 ```
 FUZZAMOTO_INPUT=$PWD/testcase.dat RUST_LOG=info ./target/release/scenario-http-server ./bitcoind
 ```
+
+## `ir` example (In-VM execution)
+You can also use `-r` option to debug the in-vm execution of the scenario.
+
+First, build all the packages with both `fuzz` and `nyx_log` feature.
+```
+cd /fuzzamoto
+BITCOIND_PATH=/bitcoin/build_fuzz/bin/bitcoind cargo build --workspace --release --features fuzz,nyx_log,inherit_stdout
+```
+
+`nyx_log` feature is necessary as it allows us to retrieve the log from bitcoind later.
+You can also add `inherit_stdout` feature if you want more verbose logs from bitcoind.
+
+Then, build the crash handler and initialize the nyx share dir as usual:
+
+```
+# Build the crash handler
+clang-19 -fPIC -DENABLE_NYX -D_GNU_SOURCE -DNO_PT_NYX \
+    ./fuzzamoto-nyx-sys/src/nyx-crash-handler.c -ldl -I. -shared -o libnyx_crash_handler.so
+# Initialize the nyx share dir
+./target/release/fuzzamoto-cli init --sharedir /tmp/fuzzamoto_scenario-ir \
+    --crash-handler /fuzzamoto/libnyx_crash_handler.so \
+    --bitcoind /bitcoin/build_fuzz/bin/bitcoind \
+    --scenario ./target/release/scenario-ir \
+    --nyx-dir ./target/release/
+```
+
+Now, run the fuzzer with `-r` option
+```
+RUST_LOG=info ./target/release/fuzzamoto-libafl \
+    --input /tmp/in --output /tmp/out/ \
+    --share /tmp/fuzzamoto_scenario-ir/ \
+    -r <path to the testcase> \
+    --cores 0 --verbose
+```
+This will execute the given testcase for only once in "reproduce" mode
+
+After this you will find the log from the bitcoind in `/tmp/out/workdir/dump/primary.log`
 
 ## Troubleshooting
 

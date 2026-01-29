@@ -422,6 +422,45 @@ pub fn probe_recent_block_hashes<T: HasBlockChainInterface>(
     return Some(ProbeResult::RecentBlockes { result: result });
 }
 
+#[cfg(feature = "nyx_log")]
+const PRIMARY_LOG: &str = "/tmp/primary.log";
+#[cfg(all(
+    feature = "nyx_log",
+    any(feature = "oracle_netsplit", feature = "oracle_consensus")
+))]
+const SECONDARY_LOG: &str = "/tmp/secondary.log";
+
+#[cfg(feature = "nyx_log")]
+fn dump_log_to_host() {
+    {
+        let log = std::fs::read(PRIMARY_LOG);
+        if let Ok(data) = log {
+            unsafe {
+                nyx_dump_file_to_host(
+                    PRIMARY_LOG.as_ptr() as *const i8,
+                    PRIMARY_LOG.len(),
+                    data.as_ptr(),
+                    data.len(),
+                );
+            }
+        }
+        #[cfg(any(feature = "oracle_netsplit", feature = "oracle_consensus"))]
+        {
+            let log = std::fs::read(SECONDARY_LOG);
+            if let Ok(data) = log {
+                unsafe {
+                    nyx_dump_file_to_host(
+                        SECONDARY_LOG.as_ptr() as *const i8,
+                        SECONDARY_LOG.len(),
+                        data.as_ptr(),
+                        data.len(),
+                    );
+                }
+            }
+        }
+    }
+}
+
 impl<TX, T> Scenario<'_, TestCase> for IrScenario<TX, T>
 where
     TX: Transport,
@@ -466,7 +505,12 @@ where
         }
 
         self.print_received();
-        self.evaluate_oracles()
+        let res = self.evaluate_oracles();
+
+        #[cfg(feature = "nyx_log")]
+        dump_log_to_host();
+
+        res
     }
 }
 

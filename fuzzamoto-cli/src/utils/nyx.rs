@@ -99,23 +99,48 @@ pub fn create_nyx_script(
     ]
     .join(":");
 
+    #[cfg(feature = "nyx_log")]
+    let primary_log = " > /tmp/primary.log 2>&1";
+    #[cfg(not(feature = "nyx_log"))]
+    let primary_log = "";
+
+    #[cfg(feature = "nyx_log")]
+    let secondary_log = " > /tmp/secondary.log 2>&1";
+    #[cfg(not(feature = "nyx_log"))]
+    let secondary_log = "";
+
     let asan_options = format!("ASAN_OPTIONS={}", asan_options);
     let crash_handler_preload = format!("LD_PRELOAD=./{}", crash_handler_name);
     let proxy_script = format!(
-        "{} LD_LIBRARY_PATH=/tmp LD_BIND_NOW=1 {} ./bitcoind \\$@",
-        asan_options, crash_handler_preload,
+        "{} LD_LIBRARY_PATH=/tmp LD_BIND_NOW=1 {} ./bitcoind \\$@{}",
+        asan_options, crash_handler_preload, primary_log
     );
 
     script.push("echo \"#!/bin/sh\" > ./bitcoind_proxy".to_string());
     script.push(format!("echo \"{}\" >> ./bitcoind_proxy", proxy_script));
     script.push("chmod +x ./bitcoind_proxy".to_string());
 
+    if secondary_bitcoind.is_some() {
+        let secondary_proxy_script = format!(
+            "{} LD_LIBRARY_PATH=/tmp LD_BIND_NOW=1 {} ./{} \\$@{}",
+            asan_options,
+            crash_handler_preload,
+            secondary_bitcoind.unwrap(),
+            secondary_log
+        );
+        script.push("echo \"#!/bin/sh\" > ./bitcoind2_proxy".to_string());
+        script.push(format!(
+            "echo \"{}\" >> ./bitcoind2_proxy",
+            secondary_proxy_script
+        ));
+        script.push("chmod +x ./bitcoind2_proxy".to_string());
+    }
+
     // Run the scenario
     script.push(format!(
-        "RUST_LOG=debug LD_LIBRARY_PATH=/tmp LD_BIND_NOW=1 ./{} ./bitcoind_proxy {} ./{} > log.txt 2>&1",
+        "RUST_LOG=debug LD_LIBRARY_PATH=/tmp LD_BIND_NOW=1 ./{} ./bitcoind_proxy {} ./bitcoind2_proxy > log.txt 2>&1",
         scenario_name,
         rpc_path.unwrap_or(""),
-        secondary_bitcoind.unwrap_or("")
     ));
 
     // Debug info
