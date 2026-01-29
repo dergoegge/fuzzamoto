@@ -7,7 +7,11 @@ use commands::*;
 use error::Result;
 use std::path::PathBuf;
 
-use crate::commands::coverage_batch::CoverageBatchCommand;
+use crate::{
+    commands::coverage_batch::CoverageBatchCommand,
+    coverage::{Scenario, scan_scenario_dir},
+    error::CliError,
+};
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -68,7 +72,13 @@ enum Commands {
             long,
             help = "Path to the fuzzamoto scenario binary that should be run with coverage measurer"
         )]
-        scenario: PathBuf,
+        scenario: Option<PathBuf>,
+        #[arg(
+            long,
+            conflicts_with = "scenario",
+            help = "Path to directory containing scenario-* binaries"
+        )]
+        scenario_dir: Option<PathBuf>,
         #[arg(
             long,
             value_name = "PROFRAWS",
@@ -147,16 +157,45 @@ fn main() -> Result<()> {
             corpus,
             bitcoind,
             scenario,
+            scenario_dir,
             profraws,
             run_only,
-        } => CoverageCommand::execute(
-            output.clone(),
-            corpus.clone(),
-            bitcoind.clone(),
-            scenario.clone(),
-            profraws.clone(),
-            *run_only,
-        ),
+        } => {
+            let scenarios: Vec<Scenario> = if let Some(dir) = scenario_dir {
+                scan_scenario_dir(&dir)?
+            } else if let Some(s) = scenario {
+                match Scenario::from_path(s) {
+                    Some(s) => vec![s],
+                    None => {
+                        return Err(
+                            CliError::InvalidInput(format!("Invalid scenario: {:?}", s)).into()
+                        );
+                    }
+                }
+            } else {
+                return Err(CliError::InvalidInput(
+                    "Must specify either --scenario or --scenario-dir".to_string(),
+                )
+                .into());
+            };
+
+            if scenarios.is_empty() {
+                return Err(CliError::InvalidInput("No scenarios found".to_string()).into());
+            }
+
+            for scenario in &scenarios {
+                log::info!("Running coverage measurement on {:?}", scenario);
+            }
+
+            CoverageCommand::execute(
+                output.clone(),
+                corpus.clone(),
+                bitcoind.clone(),
+                scenarios,
+                profraws.clone(),
+                *run_only,
+            )
+        }
         Commands::CoverageBatch {
             output,
             corpus,

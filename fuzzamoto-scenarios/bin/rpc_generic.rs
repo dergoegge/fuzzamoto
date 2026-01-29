@@ -199,8 +199,8 @@ struct RpcScenario {
 impl<'a> Scenario<'a, TestCase> for RpcScenario {
     fn new(args: &[String]) -> Result<Self, String> {
         let target = BitcoinCoreTarget::from_path(&args[1])?;
-        let rpcs =
-            fs::read_to_string(&args[2]).map_err(|e| format!("Failed to parse file: {}", e))?;
+        let rpcs = fs::read_to_string(&args[2])
+            .map_err(|e| format!("Failed to parse file {}: {}", args[2], e))?;
 
         // Note that any change in the file may invalidate existing seeds
         let mut available_rpcs: Vec<String> = vec![];

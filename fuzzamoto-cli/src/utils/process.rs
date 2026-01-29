@@ -1,4 +1,7 @@
-use crate::error::{CliError, Result};
+use crate::{
+    coverage::{Scenario, ScenarioType},
+    error::{CliError, Result},
+};
 use std::path::Path;
 use std::process::{Command, Stdio};
 
@@ -56,12 +59,17 @@ pub fn run_command_with_output(
 }
 
 pub fn run_scenario_command(
-    scenario: &Path,
+    scenario: &Scenario,
     bitcoind: &Path,
     env_vars: &[(&str, &str)],
 ) -> Result<()> {
-    let mut cmd = Command::new(scenario);
+    let mut cmd = Command::new(scenario.path());
+
     cmd.arg(bitcoind);
+
+    if matches!(scenario.ty(), ScenarioType::RPCGeneric) {
+        cmd.arg("/fuzzamoto/fuzzamoto-scenarios/rpcs.txt");
+    }
 
     for (key, value) in env_vars {
         cmd.env(key, value);

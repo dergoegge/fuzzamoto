@@ -15,7 +15,14 @@ pub fn copy_file_to_dir(src: &Path, dst_dir: &Path) -> Result<()> {
 }
 
 pub fn ensure_file_exists(path: &Path) -> Result<()> {
-    if !path.exists() {
+    if !path.exists() || !path.is_file() {
+        return Err(CliError::FileNotFound(path.display().to_string()));
+    }
+    Ok(())
+}
+
+pub fn ensure_dir_exists(path: &Path) -> Result<()> {
+    if !path.exists() || !path.is_dir() {
         return Err(CliError::FileNotFound(path.display().to_string()));
     }
     Ok(())

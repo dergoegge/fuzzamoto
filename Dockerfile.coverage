@@ -90,6 +90,7 @@ COPY ./fuzzamoto-libafl/src/ src/
 WORKDIR /fuzzamoto/fuzzamoto-scenarios
 COPY ./fuzzamoto-scenarios/Cargo.toml .
 COPY ./fuzzamoto-scenarios/bin/ bin/
+COPY ./fuzzamoto-scenarios/rpcs.txt rpcs.txt
 
 WORKDIR /fuzzamoto
 COPY ./Cargo.toml .
