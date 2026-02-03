@@ -1,0 +1,24 @@
+diff --git a/src/script/interpreter.cpp b/src/script/interpreter.cpp
+index ca405c2..7e225b8 100644
+--- a/src/script/interpreter.cpp
++++ b/src/script/interpreter.cpp
+@@ -237,10 +237,16 @@ int FindAndDelete(CScript& script, const CScript& b)
+     do
+     {
+         result.insert(result.end(), pc2, pc);
+-        while (static_cast<size_t>(end - pc) >= b.size() && std::equal(b.begin(), b.end(), pc))
++        if (static_cast<size_t>(end - pc) >= b.size() && std::equal(b.begin(), b.end(), pc))
+         {
+-            pc = pc + b.size();
+-            ++nFound;
++            // we found the needle
++            // so skip to the next op
++            auto next_op_pos = pc;
++            opcodetype tmp;
++            if (script.GetOp(next_op_pos, tmp)) {
++                pc = next_op_pos;
++                ++nFound;
++            }
+         }
+         pc2 = pc;
+     }

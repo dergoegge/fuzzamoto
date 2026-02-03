@@ -1,0 +1,30 @@
+diff --git a/src/consensus/tx_verify.cpp b/src/consensus/tx_verify.cpp
+index 00022a3..bbead2d 100644
+--- a/src/consensus/tx_verify.cpp
++++ b/src/consensus/tx_verify.cpp
+@@ -48,7 +48,7 @@ std::pair<int, int64_t> CalculateSequenceLocks(const CTransaction &tx, int flags
+     int nMinHeight = -1;
+     int64_t nMinTime = -1;
+ 
+-    bool fEnforceBIP68 = tx.version >= 2 && flags & LOCKTIME_VERIFY_SEQUENCE;
++    bool fEnforceBIP68 = static_cast<int32_t>(tx.version) >= 2 && flags & LOCKTIME_VERIFY_SEQUENCE;
+ 
+     // Do not enforce sequence numbers as a relative lock time
+     // unless we have been instructed to
+diff --git a/src/policy/policy.cpp b/src/policy/policy.cpp
+index 46ec238..da6348a 100644
+--- a/src/policy/policy.cpp
++++ b/src/policy/policy.cpp
+@@ -98,10 +98,12 @@ bool IsStandard(const CScript& scriptPubKey, TxoutType& whichType)
+ 
+ bool IsStandardTx(const CTransaction& tx, const std::optional<unsigned>& max_datacarrier_bytes, bool permit_bare_multisig, const CFeeRate& dust_relay_fee, std::string& reason)
+ {
++    /*
+     if (tx.version > TX_MAX_STANDARD_VERSION || tx.version < TX_MIN_STANDARD_VERSION) {
+         reason = "version";
+         return false;
+     }
++    */
+ 
+     // Extremely large transactions with lots of inputs can cost the network
+     // almost as much to process as they cost the sender in fees, because
