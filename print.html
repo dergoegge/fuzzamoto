@@ -768,6 +768,20 @@ docker run --privileged -it \
     fuzzamoto-coverage \
     /fuzzamoto/target/release/scenario-$SCENARIO
 </code></pre>
+<h1 id="parrallellize-coverage-measurement"><a class="header" href="#parrallellize-coverage-measurement">Parrallellize coverage measurement</a></h1>
+<p>Generating coverage reports is often time-consuming.
+In that case, you can benefit from parallelizing the coverage measurement.
+To use it, first, you need to build the images defined in both <code>Dockerfile.coverage</code> and <code>Dockerfile.coverage.generic</code>.</p>
+<pre><code class="language-bash">docker build -f Dockerfile.coverage -t fuzzamoto-coverage .
+docker build -f Dockerfile.coverage.generic -t fuzzamoto-coverage-generic .
+</code></pre>
+<p>After those images are built, copy the image ID from <code>fuzzamoto-coverage-generic</code>.</p>
+<pre><code class="language-bash">docker images | grep fuzzamoto-libafl-generic
+</code></pre>
+<p>Lastly, you can run this command to run the <code>coverage-batch</code> command for parallelized coverage measurement</p>
+<pre><code class="language-bash">cargo run -p fuzzamoto-cli -- coverage-batch --output ./output --corpus ./corpus --docker-image &lt;image id built from Docker.coverage.generic&gt;
+</code></pre>
+<p>This command will use all CPUs available, providing you a significant speedup for covearge measurement.</p>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="system-requirements"><a class="header" href="#system-requirements">System Requirements</a></h1>
 <p>For testcase reproduction (see <a href="usage/./reproducing.html">Reproducing Testcases</a>), no
 hardware restrictions with regard to architecture should exist. A linux operating
