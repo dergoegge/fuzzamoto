@@ -427,6 +427,7 @@ containing the correctly serialized transactions <code>v15</code> and <code>v30<
 <tr><td align="left"><code>LoadNode</code></td><td align="left">Loads an index for one of the test nodes.</td></tr>
 <tr><td align="left"><code>LoadConnection</code></td><td align="left">Loads an index for one of the p2p connections.</td></tr>
 <tr><td align="left"><code>LoadConnectionType</code></td><td align="left">Loads a connection type string.</td></tr>
+<tr><td align="left"><code>LoadHandshakeOpts</code></td><td align="left">Loads handshake parameters for a new connection.</td></tr>
 <tr><td align="left"><code>LoadDuration</code></td><td align="left">Loads a time duration.</td></tr>
 <tr><td align="left"><code>LoadTime</code></td><td align="left">Loads a timestamp.</td></tr>
 <tr><td align="left"><code>LoadAmount</code></td><td align="left">Loads a bitcoin amount.</td></tr>
@@ -444,6 +445,9 @@ containing the correctly serialized transactions <code>v15</code> and <code>v30<
 <tr><td align="left"><code>LoadNonce</code></td><td align="left">Loads a nonce.</td></tr>
 <tr><td align="left"><code>LoadFilterLoad</code></td><td align="left">Loads a filter for <code>filterload</code> message.</td></tr>
 <tr><td align="left"><code>LoadFilterAdd</code></td><td align="left">Loads data for <code>filteradd</code> message.</td></tr>
+<tr><td align="left"><strong>Connection operations</strong></td><td align="left"><strong>Manage p2p connections.</strong></td></tr>
+<tr><td align="left"><code>AddConnection</code></td><td align="left">Creates a new p2p connection to a node.</td></tr>
+<tr><td align="left"><code>AddConnectionWithHandshake</code></td><td align="left">Creates a new p2p connection and performs a version handshake.</td></tr>
 <tr><td align="left"><strong>Time operations</strong></td><td align="left"><strong>Manipulate the mock time.</strong></td></tr>
 <tr><td align="left"><code>AdvanceTime</code></td><td align="left">Advances time by a given duration.</td></tr>
 <tr><td align="left"><code>SetTime</code></td><td align="left">Sets the mock time to a specific value.</td></tr>
@@ -538,6 +542,7 @@ fuzzing campaign. The following generators are available:</p>
 <li><code>SendMessageGenerator</code>: Generates a new <code>SendRawMessage</code> instruction</li>
 <li><code>AdvanceTimeGenerator</code>: Generates new <code>AdvanceTime</code> and <code>SetTime</code>
 instructions</li>
+<li><code>AddConnectionGenerator</code>: Generates instructions to create new p2p connections</li>
 <li><code>CompactFilterQueryGenerator</code>: Generates new <code>SendGetCFilters</code>,
 <code>SendGetCFHeaders</code> and <code>SendGetCFCheckpt</code> instructions</li>
 <li><code>BlockGenerator</code>: Generates instructions to build a block</li>
