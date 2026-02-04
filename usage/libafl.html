@@ -159,6 +159,19 @@ fuzzing campaigns with libafl.</p>
 <p>Build the container image:</p>
 <pre><code>docker build -f Dockerfile.libafl -t fuzzamoto-libafl .
 </code></pre>
+<p>You can customize the Bitcoin Core source when building the image using the following build arguments:</p>
+<h3 id="build-arguments"><a class="header" href="#build-arguments">Build Arguments</a></h3>
+<ul>
+<li><code>OWNER</code>: Repository owner (default: <code>bitcoin</code>)</li>
+<li><code>REPO</code>: Repository name (default: <code>bitcoin</code>)</li>
+<li><code>PR_NUMBER</code>: Pull request number to build from</li>
+<li><code>BITCOIN_COMMIT</code>: Specific commit hash to build</li>
+</ul>
+<p>Examples:</p>
+<pre><code>docker build --build-arg PR_NUMBER=1234 -f Dockerfile.libafl -t fuzzamoto-libafl .
+docker build --build-arg BITCOIN_COMMIT=abc123 -f Dockerfile.libafl -t fuzzamoto-libafl .
+docker build --build-arg OWNER=abc123 --build-arg PR_NUMBER=1 -f Dockerfile.libafl -t fuzzamoto-libafl .
+</code></pre>
 <p>And then create a new container from it (mounting the current directory to
 <code>/fuzzamoto</code>):</p>
 <pre><code>docker run --privileged -it -v $PWD:/fuzzamoto fuzzamoto-libafl bash
