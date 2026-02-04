@@ -5,16 +5,180 @@ use fuzzamoto::{
 };
 
 use arbitrary::{Arbitrary, Unstructured};
+use std::fmt;
 use std::io::Write;
 
 use std::net::TcpStream;
+
+#[derive(Arbitrary, Clone, Copy)]
+enum Method {
+    Get,
+    Post,
+    Put,
+    Delete,
+}
+
+impl Method {
+    fn as_str(self) -> &'static str {
+        match self {
+            Method::Get => "GET",
+            Method::Post => "POST",
+            Method::Put => "PUT",
+            Method::Delete => "DELETE",
+        }
+    }
+
+    fn can_have_body(self) -> bool {
+        // maybe cover delete?
+        matches!(self, Method::Post | Method::Put)
+    }
+}
+
+#[derive(Arbitrary)]
+struct Path<'a> {
+    raw: &'a [u8],
+}
+
+impl fmt::Display for Path<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        const MAX_LEN: usize = 128;
+
+        // Ensure it starts with '/'
+        write!(f, "/")?;
+
+        for &b in self.raw.iter().take(MAX_LEN) {
+            match b {
+                // "unreserved" + a few common URL delimiters
+                b'A'..=b'Z'
+                | b'a'..=b'z'
+                | b'0'..=b'9'
+                | b'-'
+                | b'_'
+                | b'.'
+                | b'~'
+                | b'/'
+                | b'?'
+                | b'&'
+                | b'='
+                | b'%'
+                | b'+'
+                | b':' => {
+                    // Avoid introducing request-line breaking whitespace/control chars
+                    write!(f, "{}", b as char)?;
+                }
+                // Explicitly disallow spaces and controls (including \r, \n, \t)
+                0x00..=0x20 | 0x7f..=0xff => {
+                    // Percent-encode to keep it URL-like without breaking the request
+                    write!(
+                        f,
+                        "%{}{}",
+                        nibble_to_hex((b >> 4) & 0xF),
+                        nibble_to_hex(b & 0xF)
+                    )?;
+                }
+                _ => {
+                    write!(
+                        f,
+                        "%{}{}",
+                        nibble_to_hex((b >> 4) & 0xF),
+                        nibble_to_hex(b & 0xF)
+                    )?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+fn nibble_to_hex(n: u8) -> char {
+    match n {
+        0..=9 => (b'0' + n) as char,
+        10..=15 => (b'A' + (n - 10)) as char,
+        _ => '0',
+    }
+}
+
+struct HttpMessage<'a> {
+    is_chaos: bool,
+    method: Method,
+    path: Path<'a>,
+    body: &'a [u8],
+    chaos_data: &'a [u8],
+}
+
+impl<'a> Arbitrary<'a> for HttpMessage<'a> {
+    fn arbitrary(u: &mut Unstructured<'a>) -> arbitrary::Result<Self> {
+        // Use a single byte to determine if this is chaos or well-formed
+        // 0-25 = chaos (~10%), 26-255 = well-formed (~90%)
+        // Might we use rng for this?
+        let chaos_byte: u8 = Arbitrary::arbitrary(u)?;
+        let is_chaos = chaos_byte < 26;
+
+        Ok(HttpMessage {
+            is_chaos,
+            method: Arbitrary::arbitrary(u)?,
+            path: Arbitrary::arbitrary(u)?,
+            body: Arbitrary::arbitrary(u)?,
+            chaos_data: Arbitrary::arbitrary(u)?,
+        })
+    }
+}
+
+fn build_request(msg: &HttpMessage<'_>) -> Vec<u8> {
+    if msg.is_chaos {
+        const MAX_CHAOS: usize = 8 * 1024;
+        if msg.chaos_data.len() > MAX_CHAOS {
+            msg.chaos_data[..MAX_CHAOS].to_vec()
+        } else {
+            msg.chaos_data.to_vec()
+        }
+    } else {
+        build_wellformed_request(msg.method, &msg.path, msg.body)
+    }
+}
+
+fn build_wellformed_request(method: Method, path: &Path<'_>, body: &[u8]) -> Vec<u8> {
+    const MAX_BODY: usize = 8 * 1024;
+    let body = if body.len() > MAX_BODY {
+        &body[..MAX_BODY]
+    } else {
+        body
+    };
+
+    let mut req = Vec::with_capacity(256 + body.len());
+
+    let _ = write!(
+        req,
+        "{} {} HTTP/1.1\r\n\
+         Host: localhost\r\n\
+         Connection: keep-alive\r\n",
+        method.as_str(),
+        path,
+    );
+
+    if method.can_have_body() {
+        let _ = write!(
+            req,
+            "Content-Type: application/json\r\n\
+             Content-Length: {}\r\n\
+             \r\n",
+            body.len()
+        );
+        req.extend_from_slice(body);
+    } else {
+        req.extend_from_slice(b"\r\n");
+    }
+
+    req
+}
 
 #[derive(Arbitrary)]
 enum Action<'a> {
     Connect,
     SendMessage {
         connection_id: u8,
-        message: &'a [u8],
+        message: HttpMessage<'a>,
     },
     Disconnect {
         connection_id: u8,
@@ -79,7 +243,8 @@ impl<'a> Scenario<'a, TestCase<'a>> for HttpServerScenario {
                     }
                     let index = connection_id as usize % connections.len();
                     let connection = connections.get_mut(index).unwrap();
-                    let _ = connection.write_all(message);
+                    let req = build_request(&message);
+                    let _ = connection.write_all(&req);
                     let _ = connection.flush();
                 }
                 Action::Disconnect { connection_id } => {
