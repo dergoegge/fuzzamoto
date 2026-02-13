@@ -386,7 +386,11 @@ where
             && let Ok(bytes) = postcard::to_allocvec(&self.probe_results)
         {
             use base64::prelude::{BASE64_STANDARD, Engine};
-            nyx_print(BASE64_STANDARD.encode(&bytes).as_bytes());
+            let encoded = BASE64_STANDARD.encode(&bytes);
+            let message = fuzzamoto::StdoutMessage::Probe(encoded);
+            if let Ok(envelope) = serde_json::to_string(&message) {
+                nyx_print(envelope.as_bytes());
+            }
         }
         self.probe_results.clear();
     }
