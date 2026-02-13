@@ -477,18 +477,21 @@ where
                     }),
                     IrMinimizerStage::<CuttingMinimizer, _, _>::new(
                         trace_handle.clone(),
+                        stdout_observer_handle.clone(),
                         200,
                         minimizing_crash,
                         &continue_minimizing
                     ),
                     IrMinimizerStage::<InstrBlockMinimizer, _, _>::new(
                         trace_handle.clone(),
+                        stdout_observer_handle.clone(),
                         200,
                         minimizing_crash,
                         &continue_minimizing
                     ),
                     IrMinimizerStage::<NoppingMinimizer, _, _>::new(
                         trace_handle.clone(),
+                        stdout_observer_handle.clone(),
                         200,
                         minimizing_crash,
                         &continue_minimizing

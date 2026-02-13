@@ -18,6 +18,30 @@ use libafl::{
 
 use fuzzamoto::assertions::{AssertionScope, write_assertions};
 
+/// Parse assertions from raw stdout bytes.
+///
+/// This extracts all `AssertionScope` entries from the stdout output of a
+/// fuzzamoto target execution.
+pub fn parse_assertions_from_stdout(buffer: &[u8]) -> HashMap<String, AssertionScope> {
+    let stdout = String::from_utf8_lossy(buffer);
+    let mut assertions = HashMap::new();
+    for line in stdout.lines() {
+        let trimmed = line.trim().trim_matches(|c| c == '\0');
+        if let Ok(fuzzamoto::StdoutMessage::Assertion(data)) =
+            serde_json::from_str::<fuzzamoto::StdoutMessage>(trimmed)
+        {
+            use base64::prelude::{BASE64_STANDARD, Engine};
+            if let Ok(decoded) = BASE64_STANDARD.decode(&data)
+                && let Ok(json) = String::from_utf8(decoded)
+                && let Ok(assertion) = serde_json::from_str::<AssertionScope>(&json)
+            {
+                assertions.insert(assertion.message(), assertion);
+            }
+        }
+    }
+    assertions
+}
+
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 pub struct AssertionFeedback {
     assertions: HashMap<String, AssertionScope>,
@@ -84,22 +108,11 @@ where
             .output
             .as_ref()
             .ok_or(Error::illegal_state("StdOutObserver has no stdout"))?;
-        let stdout = String::from_utf8_lossy(buffer).into_owned();
 
+        let parsed = parse_assertions_from_stdout(buffer);
         let mut interesting = false;
-        for line in stdout.lines() {
-            let trimmed = line.trim().trim_matches(|c| c == '\0');
-            if let Ok(fuzzamoto::StdoutMessage::Assertion(data)) =
-                serde_json::from_str::<fuzzamoto::StdoutMessage>(trimmed)
-            {
-                use base64::prelude::{BASE64_STANDARD, Engine};
-                if let Ok(decoded) = BASE64_STANDARD.decode(&data)
-                    && let Ok(json) = String::from_utf8(decoded)
-                    && let Ok(assertion) = serde_json::from_str::<AssertionScope>(&json)
-                {
-                    interesting |= self.evaluate_assertion(assertion);
-                }
-            }
+        for (_, assertion) in parsed {
+            interesting |= self.evaluate_assertion(assertion);
         }
 
         let now = Instant::now();
@@ -119,7 +132,6 @@ where
                     libafl::Error::unknown(format!("Failed to open output file: {e}"))
                 })?;
             write_assertions(&mut output_file, &self.assertions).map_err(|e| {
-                log::error!("oh no {e:?}");
                 libafl::Error::unknown(format!("Failed to wirte to output file: {e}"))
             })?;
         }
@@ -148,8 +160,8 @@ where
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
-struct AssertionMetadata {
-    assertions: HashMap<String, AssertionScope>,
+pub struct AssertionMetadata {
+    pub assertions: HashMap<String, AssertionScope>,
 }
 
 impl_serdeany!(AssertionMetadata);
