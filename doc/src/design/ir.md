@@ -204,7 +204,6 @@ containing the correctly serialized transactions `v15` and `v30`.
 | `AddWitness` | Adds an item to the witness stack. |
 | `EndWitnessStack`| Finishes building the witness stack. |
 | **Compact Block** | **Construct a compact block.**|
-| `BuildCompactBlock` | Builds a compact block. |
 | **Blocktxn building** | **Construct a BIP152 blocktxn message**|
 | `BeginBuildBlockTxn` | Begins building a blocktxn message after sending a compact block. |
 | `AddTxToBlockTxn` | Adds a transaction to the blocktxn message. |

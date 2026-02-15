@@ -95,7 +95,7 @@ fn probe_result_mapper(
                 };
             };
 
-            let Some((_, block_var, tx_vars)) = metadata.block_variables(&request.block_hash)
+            let Some((_, block_var, _, tx_vars)) = metadata.block_variables(&request.block_hash)
             else {
                 return ProbeResult::Failure {
                     command: s.clone(),
@@ -468,7 +468,7 @@ pub fn probe_recent_block_hashes<T: HasBlockChainInterface>(
 
     let mut result = Vec::new();
     for (height, hash) in &hashes {
-        if let Some((header, _, _)) = meta.block_variables(hash)
+        if let Some((header, _, _, _)) = meta.block_variables(hash)
             && let Some(inst) = meta.variable_indices().get(header)
         {
             result.push(RecentBlock {

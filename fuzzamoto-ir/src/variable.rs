@@ -52,6 +52,9 @@ pub enum Variable {
     Block,
     Header,
 
+    ConstPrefillTransactions,
+    MutPrefillTransactions,
+
     BlockVersion,
 
     MutFilterLoad, // Mutable filter (under construction)

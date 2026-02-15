@@ -292,6 +292,7 @@ impl ProgramBuilder {
 
         Ok(())
     }
+
     pub fn append_program_without_threshold(
         &mut self,
         program: Program,
@@ -352,6 +353,68 @@ impl ProgramBuilder {
         } else {
             None
         }
+    }
+
+    /// Given a Block variable index, return the `ConstBlockTransactions` variable index and the
+    /// list of `ConstTx` variable indices that were added to that block. Both are guaranteed to
+    /// belong to the same block, making them safe to pass to `AddPrefillTx`.
+    #[must_use]
+    pub fn get_block_vars(&self, block_var_index: usize) -> Option<(usize, Vec<usize>)> {
+        // Walk instructions tracking the running variable index to find the BuildBlock
+        // instruction whose Block output sits at block_var_index.
+        // BuildBlock outputs: Header (offset 0), Block (offset 1), CoinbaseTx (offset 2).
+        let mut var_count = 0;
+        for instruction in &self.instructions {
+            if matches!(instruction.operation, Operation::BuildBlock) {
+                // offset 1 is the Block variable
+                if var_count + 1 == block_var_index {
+                    // inputs[4] is the ConstBlockTransactions variable
+                    let block_transactions_idx = instruction.inputs[4];
+
+                    // Find the MutBlockTransactions that was closed into block_transactions_idx
+                    // by tracing the EndBlockTransactions instruction.
+                    let tx_var_indices =
+                        self.get_tx_var_indices_for_block_transactions(block_transactions_idx);
+
+                    return Some((block_transactions_idx, tx_var_indices));
+                }
+            }
+            var_count +=
+                instruction.operation.num_outputs() + instruction.operation.num_inner_outputs();
+        }
+        None
+    }
+
+    /// Given a `ConstBlockTransactions` variable index, return the `ConstTx` variable indices that
+    /// were added to it via `AddTx` instructions.
+    #[must_use]
+    fn get_tx_var_indices_for_block_transactions(
+        &self,
+        block_transactions_idx: usize,
+    ) -> Vec<usize> {
+        // Find the EndBlockTransactions instruction whose output is block_transactions_idx,
+        // then collect all AddTx instructions that fed into the same MutBlockTransactions.
+        let mut var_count = 0;
+        for instruction in &self.instructions {
+            if matches!(instruction.operation, Operation::EndBlockTransactions)
+                && var_count == block_transactions_idx
+            {
+                // inputs[0] is the MutBlockTransactions being closed
+                let mut_block_transactions_idx = instruction.inputs[0];
+                return self
+                    .instructions
+                    .iter()
+                    .filter(|i| {
+                        matches!(i.operation, Operation::AddTx)
+                            && i.inputs[0] == mut_block_transactions_idx
+                    })
+                    .map(|i| i.inputs[1]) // inputs[1] is the ConstTx var index
+                    .collect();
+            }
+            var_count +=
+                instruction.operation.num_outputs() + instruction.operation.num_inner_outputs();
+        }
+        Vec::new()
     }
 
     /// Get the nearest (searched in reverse) available (in the current scope) variable of a given
