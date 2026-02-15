@@ -116,7 +116,9 @@ pub enum Operation {
     BuildPayToTaproot,
 
     // cmpctblock building operations
-    BuildCompactBlock,
+    BuildCompactBlock {
+        prefill_indices: Vec<usize>,
+    },
 
     // filterload building operations
     BeginBuildFilterLoad,
@@ -368,7 +370,9 @@ impl fmt::Display for Operation {
             Operation::EndWitnessStack => write!(f, "EndWitnessStack"),
             Operation::AddWitness => write!(f, "AddWitness"),
 
-            Operation::BuildCompactBlock => write!(f, "BuildCompactBlock"),
+            Operation::BuildCompactBlock { prefill_indices } => {
+                write!(f, "BuildCompactBlock(prefill={prefill_indices:?})")
+            }
 
             Operation::BeginBuildCoinbaseTx => write!(f, "BeginBuildCoinbaseTx"),
             Operation::EndBuildCoinbaseTx => write!(f, "EndBuildCoinbaseTx"),
@@ -531,7 +535,7 @@ impl Operation {
             | Operation::AddTxoToFilter
             | Operation::BuildFilterAddFromTx
             | Operation::BuildFilterAddFromTxo
-            | Operation::BuildCompactBlock
+            | Operation::BuildCompactBlock { .. }
             | Operation::LoadNonce(..)
             | Operation::AddTxToBlockTxn
             | Operation::EndBuildBlockTxn
@@ -733,7 +737,7 @@ impl Operation {
             | Operation::AddTxoToFilter
             | Operation::BuildFilterAddFromTx
             | Operation::BuildFilterAddFromTxo
-            | Operation::BuildCompactBlock
+            | Operation::BuildCompactBlock { .. }
             | Operation::SendFilterLoad
             | Operation::SendFilterAdd
             | Operation::SendFilterClear
@@ -853,7 +857,7 @@ impl Operation {
             Operation::AddTxoToFilter => vec![],
             Operation::EndBuildFilterLoad => vec![Variable::ConstFilterLoad],
 
-            Operation::BuildCompactBlock => vec![Variable::CompactBlock],
+            Operation::BuildCompactBlock { .. } => vec![Variable::CompactBlock],
 
             Operation::BuildFilterAddFromTx => vec![Variable::FilterAdd],
             Operation::BuildFilterAddFromTxo => vec![Variable::FilterAdd],
@@ -1050,7 +1054,7 @@ impl Operation {
             Operation::BuildFilterAddFromTx => vec![Variable::ConstTx],
             Operation::BuildFilterAddFromTxo => vec![Variable::Txo],
 
-            Operation::BuildCompactBlock => vec![Variable::Block, Variable::Nonce],
+            Operation::BuildCompactBlock { .. } => vec![Variable::Block, Variable::Nonce],
 
             Operation::SendFilterLoad => vec![Variable::Connection, Variable::ConstFilterLoad],
             Operation::SendFilterAdd => vec![Variable::Connection, Variable::FilterAdd],
@@ -1165,7 +1169,7 @@ impl Operation {
             | Operation::LoadFilterLoad { .. }
             | Operation::LoadFilterAdd { .. }
             | Operation::LoadNonce(..)
-            | Operation::BuildCompactBlock
+            | Operation::BuildCompactBlock { .. }
             | Operation::TaprootScriptsUseAnnex
             | Operation::TaprootTxoUseAnnex
             | Operation::EndBuildTx
