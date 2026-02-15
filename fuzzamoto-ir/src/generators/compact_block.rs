@@ -29,16 +29,22 @@ impl<R: RngCore> Generator<R> for CompactBlockGenerator {
                 inputs: vec![],
                 operation: Operation::LoadNonce(nonce),
             })
-            .expect("Inserting BeginBuildCompactBlock should always succeed")
+            .expect("LoadNonce should always succeed")
             .pop()
-            .expect("BeginBuildCompactBlock should always produce a var");
+            .expect("LoadNonce should always produce a var");
+
+        let num_prefill = rng.gen_range(0..=8);
+        let mut prefill_indices: Vec<usize> =
+            (0..num_prefill).map(|_| rng.gen_range(0..16)).collect();
+        prefill_indices.sort_unstable();
+        prefill_indices.dedup();
 
         let cmpct_block = builder
             .append(Instruction {
                 inputs: vec![block.index, nonce_var.index],
-                operation: Operation::BuildCompactBlock,
+                operation: Operation::BuildCompactBlock { prefill_indices },
             })
-            .expect("Inserting BuildCompactBlock should always succeed")
+            .expect("BuildCompactBlock should always succeed")
             .pop()
             .expect("BuildCompactBlock should always produce a var");
 

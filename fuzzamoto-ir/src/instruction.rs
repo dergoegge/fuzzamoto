@@ -180,7 +180,7 @@ impl Instruction {
             | Operation::BeginBlockTransactions
             | Operation::BeginBuildFilterLoad
             | Operation::EndBuildFilterLoad
-            | Operation::BuildCompactBlock
+            | Operation::BuildCompactBlock { .. }
             | Operation::BeginBuildCoinbaseTx
             | Operation::EndBuildCoinbaseTx
             | Operation::BeginBuildCoinbaseTxOutputs

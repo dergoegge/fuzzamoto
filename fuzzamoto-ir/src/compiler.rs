@@ -364,7 +364,7 @@ impl Compiler {
                     self.handle_build_taproot_tree(instruction)?;
                 }
 
-                Operation::BuildCompactBlock => {
+                Operation::BuildCompactBlock { .. } => {
                     self.handle_compact_block_building_operations(instruction)?;
                 }
 
@@ -842,13 +842,17 @@ impl Compiler {
         instruction: &Instruction,
     ) -> Result<(), CompilerError> {
         match &instruction.operation {
-            Operation::BuildCompactBlock => {
+            Operation::BuildCompactBlock { prefill_indices } => {
                 let block = self.get_input::<bitcoin::Block>(&instruction.inputs, 0)?;
                 let nonce = self.get_input::<u64>(&instruction.inputs, 1)?;
 
-                // TODO: put other txs than coinbase tx
-                let prefill = &[];
-                let header_and_shortids = HeaderAndShortIds::from_block(block, *nonce, 2, prefill)
+                let prefill: Vec<usize> = prefill_indices
+                    .iter()
+                    .copied()
+                    .filter(|&i| i > 0 && i < block.txdata.len())
+                    .collect();
+
+                let header_and_shortids = HeaderAndShortIds::from_block(block, *nonce, 2, &prefill)
                     .expect("from_block should never fail");
                 self.append_variable(CmpctBlock {
                     compact_block: header_and_shortids,
