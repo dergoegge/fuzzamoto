@@ -159,6 +159,7 @@ impl Instruction {
             | Operation::TakeCoinbaseTxo
             | Operation::TaprootScriptsUseAnnex
             | Operation::TaprootTxoUseAnnex
+            | Operation::BuildPayToBareMulti { .. }
             | Operation::TakeTxo => true,
 
             Operation::Nop { .. }
