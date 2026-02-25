@@ -24,6 +24,19 @@ pub trait TargetNode: Sized {
 
     /// Check if the target is still alive.
     fn is_alive(&self) -> Result<(), String>;
+
+    /// Create a `mempool.dat` file from the given raw bytes and import it into the node's mempool.
+    ///
+    /// The implementation writes `bytes` to a `mempool.dat` file in the node's working directory
+    /// and then calls `importmempool` on that file. The default implementation is a no-op for
+    /// targets that do not support this operation.
+    ///
+    /// # Arguments
+    ///
+    /// * `bytes` - Raw bytes to write as the `mempool.dat` file content.
+    fn import_mempool(&self, _bytes: &[u8]) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 /// `Target` is the interface that the test harness will use to interact with the target Bitcoin

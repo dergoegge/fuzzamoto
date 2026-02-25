@@ -3,6 +3,7 @@ mod error;
 mod utils;
 
 use clap::{Parser, Subcommand};
+use commands::init::InitOptions;
 use commands::{CoverageCommand, InitCommand, IrCommand, ir};
 use error::Result;
 use std::path::PathBuf;
@@ -51,6 +52,12 @@ enum Commands {
             help = "Path to the file with the RPC commands that should be copied into the share directory"
         )]
         rpc_path: Option<PathBuf>,
+
+        #[arg(
+            long,
+            help = "Path to a mempool.dat seed file to be imported into the node's mempool before the snapshot is taken"
+        )]
+        seedfile: Option<PathBuf>,
     },
 
     /// Create a html coverage report for a given corpus
@@ -133,14 +140,18 @@ fn main() -> Result<()> {
             scenario,
             nyx_dir,
             rpc_path,
+            seedfile,
         } => InitCommand::execute(
             sharedir,
             crash_handler,
             bitcoind,
-            secondary_bitcoind.as_ref(),
             scenario,
             nyx_dir,
-            rpc_path.as_ref(),
+            &InitOptions {
+                secondary_bitcoind: secondary_bitcoind.as_ref(),
+                rpc_path: rpc_path.as_ref(),
+                seedfile: seedfile.as_ref(),
+            },
         ),
         Commands::Coverage {
             output,

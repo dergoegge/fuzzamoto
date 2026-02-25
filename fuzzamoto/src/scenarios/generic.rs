@@ -72,7 +72,7 @@ pub struct GenericScenario<TX: Transport, T: Target<TX>> {
 const INTERVAL: u64 = 1;
 
 impl<TX: Transport, T: Target<TX>> GenericScenario<TX, T> {
-    fn from_target(mut target: T) -> Result<Self, String> {
+    fn from_target_with_seedfile(mut target: T, seedfile: Option<&str>) -> Result<Self, String> {
         let genesis_block = bitcoin::blockdata::constants::genesis_block(bitcoin::Network::Regtest);
 
         let mut time = u64::from(genesis_block.header.time);
@@ -209,6 +209,22 @@ impl<TX: Transport, T: Target<TX>> GenericScenario<TX, T> {
             connection.send_and_recv(&("inv".to_string(), encode::serialize(&inv)), false)?;
         }
 
+        // Import mempool from seed file if provided. The seed file's raw bytes are written as
+        // mempool.dat and imported into the node before the snapshot is taken, so fuzz inputs
+        // can interact with pre-existing transactions.
+        if let Some(path) = seedfile {
+            match std::fs::read(path) {
+                Ok(bytes) => {
+                    if let Err(e) = target.import_mempool(&bytes) {
+                        log::warn!("Failed to import mempool from seed file '{path}': {e}");
+                    } else {
+                        log::info!("Imported mempool from seed file: {path}");
+                    }
+                }
+                Err(e) => log::warn!("Failed to read seed file '{path}': {e}"),
+            }
+        }
+
         Ok(Self {
             target,
             time,
@@ -222,7 +238,11 @@ impl<TX: Transport, T: Target<TX>> GenericScenario<TX, T> {
 impl<TX: Transport, T: Target<TX>> Scenario<'_, TestCase> for GenericScenario<TX, T> {
     fn new(args: &[String]) -> Result<Self, String> {
         let target = T::from_path(&args[1])?;
-        Self::from_target(target)
+        let seedfile = args
+            .windows(2)
+            .find(|w| w[0] == "--seedfile")
+            .map(|w| w[1].clone());
+        Self::from_target_with_seedfile(target, seedfile.as_deref())
     }
 
     fn run(&mut self, testcase: TestCase) -> ScenarioResult {

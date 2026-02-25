@@ -2,6 +2,12 @@ use crate::error::{CliError, Result};
 use crate::utils::{file_ops, nyx, process};
 use std::path::{Path, PathBuf};
 
+pub struct InitOptions<'a> {
+    pub secondary_bitcoind: Option<&'a PathBuf>,
+    pub rpc_path: Option<&'a PathBuf>,
+    pub seedfile: Option<&'a PathBuf>,
+}
+
 pub struct InitCommand;
 
 impl InitCommand {
@@ -9,11 +15,13 @@ impl InitCommand {
         sharedir: &Path,
         crash_handler: &Path,
         bitcoind: &Path,
-        secondary_bitcoind: Option<&PathBuf>,
         scenario: &Path,
         nyx_dir: &Path,
-        rpc_path: Option<&PathBuf>,
+        opts: &InitOptions<'_>,
     ) -> Result<()> {
+        let secondary_bitcoind = opts.secondary_bitcoind;
+        let rpc_path = opts.rpc_path;
+        let seedfile = opts.seedfile;
         file_ops::ensure_sharedir_not_exists(sharedir)?;
         file_ops::create_dir_all(sharedir)?;
 
@@ -28,6 +36,11 @@ impl InitCommand {
         if let Some(rpc) = rpc_path {
             file_ops::ensure_file_exists(rpc)?;
             file_ops::copy_file_to_dir(rpc, sharedir)?;
+        }
+
+        if let Some(seed) = seedfile {
+            file_ops::ensure_file_exists(seed)?;
+            file_ops::copy_file_to_dir(seed, sharedir)?;
         }
 
         let mut all_deps = Vec::new();
@@ -117,14 +130,22 @@ impl InitCommand {
             .and_then(|p| p.file_name())
             .and_then(|name| name.to_str());
 
+        let seedfile_name = seedfile
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .and_then(|name| name.to_str());
+
         nyx::create_nyx_script(
             sharedir,
             &all_deps,
             &binary_names,
             &crash_handler_name,
             scenario_name,
-            secondary_name,
-            rpc_name,
+            &nyx::NyxScriptOptions {
+                secondary_bitcoind: secondary_name,
+                rpc_path: rpc_name,
+                seedfile: seedfile_name,
+            },
         )?;
 
         Ok(())
