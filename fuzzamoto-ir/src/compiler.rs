@@ -82,8 +82,8 @@ pub type ConnectionId = usize;
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 pub struct CompiledMetadata {
-    // Map from blockhash to (block variable index, list of transaction variable indices)
-    block_tx_var_map: HashMap<bitcoin::BlockHash, (usize, usize, Vec<usize>)>,
+    // Map from blockhash to (header_var, block_var, block_transactions_var, tx_var_indices)
+    block_tx_var_map: HashMap<bitcoin::BlockHash, (usize, usize, usize, Vec<usize>)>,
     // Map from connection ids to connection variable indices.
     connection_map: HashMap<ConnectionId, VariableIndex>,
     // List of instruction indices that correspond to actions in the compiled program (does not include probe operation)
@@ -112,15 +112,28 @@ impl CompiledMetadata {
         }
     }
 
-    // Get the block variable index and list of transaction variable indices for a given block hash
+    /// Get the header var index, block var index, `block_transactions` var index, and list of
+    /// transaction variable indices for a given block hash.
     #[must_use]
     pub fn block_variables(
         &self,
         block_hash: &bitcoin::BlockHash,
-    ) -> Option<(usize, usize, &[usize])> {
+    ) -> Option<(usize, usize, usize, &[usize])> {
+        self.block_tx_var_map.get(block_hash).map(
+            |(header_var, block_var, block_txs_var, tx_vars)| {
+                (*header_var, *block_var, *block_txs_var, tx_vars.as_slice())
+            },
+        )
+    }
+
+    /// Look up a block by its block variable index, returning the `block_transactions` var index
+    /// and the list of transaction variable indices that belong to it.
+    #[must_use]
+    pub fn block_vars_by_block_index(&self, block_var_index: usize) -> Option<(usize, &[usize])> {
         self.block_tx_var_map
-            .get(block_hash)
-            .map(|(header_var, block_var, tx_vars)| (*header_var, *block_var, tx_vars.as_slice()))
+            .values()
+            .find(|(_, block_var, _, _)| *block_var == block_var_index)
+            .map(|(_, _, block_txs_var, tx_vars)| (*block_txs_var, tx_vars.as_slice()))
     }
 
     // Get the list of instruction indices that correspond to actions in the compiled program
@@ -277,6 +290,11 @@ struct BlockTransactions {
 }
 
 #[derive(Clone, Debug)]
+struct PrefillTransactions {
+    indices: Vec<usize>,
+}
+
+#[derive(Clone, Debug)]
 struct AddrList {
     entries: Vec<(u32, Address)>,
 }
@@ -362,10 +380,6 @@ impl Compiler {
                 }
                 Operation::BuildTaprootTree { .. } => {
                     self.handle_build_taproot_tree(instruction)?;
-                }
-
-                Operation::BuildCompactBlock => {
-                    self.handle_compact_block_building_operations(instruction)?;
                 }
 
                 Operation::BeginBlockTransactions
@@ -457,6 +471,13 @@ impl Compiler {
 
                 Operation::AddConnection | Operation::AddConnectionWithHandshake { .. } => {
                     self.handle_new_connection_operations(instruction)?;
+                }
+
+                Operation::BeginPrefillTransactions
+                | Operation::AddPrefillTx
+                | Operation::EndPrefillTransactions
+                | Operation::BuildCompactBlockWithPrefill => {
+                    self.handle_prefill_building_operations(instruction)?;
                 }
 
                 Operation::SendRawMessage
@@ -729,11 +750,7 @@ impl Compiler {
                 let octets: [u8; 16] = payload.as_slice().try_into().expect("length checked");
                 AddrV2::Cjdns(Ipv6Addr::from(octets))
             }
-            AddrNetwork::Yggdrasil => {
-                // `bitcoin::p2p::address::AddrV2` has no Yggdrasil variant; preserve the
-                // network ID via the generic `Unknown` encoding.
-                AddrV2::Unknown(AddrNetwork::Yggdrasil.id(), payload.clone())
-            }
+            AddrNetwork::Yggdrasil => AddrV2::Unknown(AddrNetwork::Yggdrasil.id(), payload.clone()),
             AddrNetwork::Unknown(id) => AddrV2::Unknown(id, payload.clone()),
         };
 
@@ -832,30 +849,6 @@ impl Compiler {
             }
             _ => unreachable!(
                 "Non-filter-building operation passed to handle_filter_building_operations"
-            ),
-        }
-        Ok(())
-    }
-
-    fn handle_compact_block_building_operations(
-        &mut self,
-        instruction: &Instruction,
-    ) -> Result<(), CompilerError> {
-        match &instruction.operation {
-            Operation::BuildCompactBlock => {
-                let block = self.get_input::<bitcoin::Block>(&instruction.inputs, 0)?;
-                let nonce = self.get_input::<u64>(&instruction.inputs, 1)?;
-
-                // TODO: put other txs than coinbase tx
-                let prefill = &[];
-                let header_and_shortids = HeaderAndShortIds::from_block(block, *nonce, 2, prefill)
-                    .expect("from_block should never fail");
-                self.append_variable(CmpctBlock {
-                    compact_block: header_and_shortids,
-                });
-            }
-            _ => unreachable!(
-                "Non-compactblock-building operation passed to handle_compact_block_building_operations"
             ),
         }
         Ok(())
@@ -1785,6 +1778,65 @@ impl Compiler {
         }
     }
 
+    fn handle_prefill_building_operations(
+        &mut self,
+        instruction: &Instruction,
+    ) -> Result<(), CompilerError> {
+        match &instruction.operation {
+            Operation::BeginPrefillTransactions => {
+                self.append_variable(PrefillTransactions {
+                    indices: Vec::new(),
+                });
+            }
+            Operation::AddPrefillTx => {
+                let block_txs = self
+                    .get_input::<BlockTransactions>(&instruction.inputs, 1)?
+                    .clone();
+                let tx_to_prefill = self.get_input::<Tx>(&instruction.inputs, 2)?;
+                let tx_to_prefill_id = tx_to_prefill.id;
+
+                // Find the position of this tx within the block's transaction list.
+                // If the tx is not part of this block, skip it silently.
+                let Some(position) = block_txs.txs.iter().position(|t| t.id == tx_to_prefill_id)
+                else {
+                    return Ok(());
+                };
+
+                let prefill_var =
+                    self.get_input_mut::<PrefillTransactions>(&instruction.inputs, 0)?;
+                if !prefill_var.indices.contains(&position) {
+                    prefill_var.indices.push(position);
+                }
+            }
+            Operation::EndPrefillTransactions => {
+                let prefill_var = self
+                    .get_input::<PrefillTransactions>(&instruction.inputs, 0)?
+                    .clone();
+                self.append_variable(prefill_var);
+            }
+            Operation::BuildCompactBlockWithPrefill => {
+                let block = self.get_input::<bitcoin::Block>(&instruction.inputs, 0)?;
+                let nonce = self.get_input::<u64>(&instruction.inputs, 1)?;
+                let prefill_var = self.get_input::<PrefillTransactions>(&instruction.inputs, 2)?;
+
+                let mut prefill = prefill_var.indices.clone();
+                // Filter out-of-bounds indices defensively, same as existing BuildCompactBlock.
+                prefill.retain(|&i| i > 0 && i < block.txdata.len());
+                prefill.sort_unstable();
+                prefill.dedup();
+
+                let header_and_shortids = HeaderAndShortIds::from_block(block, *nonce, 2, &prefill)
+                    .expect("from_block should never fail");
+
+                self.append_variable(CmpctBlock {
+                    compact_block: header_and_shortids,
+                });
+            }
+            _ => unreachable!("Non-prefill operation passed to handle_prefill_building_operations"),
+        }
+        Ok(())
+    }
+
     fn handle_new_connection_operations(
         &mut self,
         instruction: &Instruction,
@@ -1919,6 +1971,10 @@ impl Compiler {
             .get_input::<BlockTransactions>(&instruction.inputs, 4)?
             .clone();
 
+        // Capture the ConstBlockTransactions variable index before we start
+        // appending new variables, so we can store it in the metadata.
+        let block_transactions_var_index = instruction.inputs[4];
+
         coinbase_tx_var.tx.tx.input[0].script_sig = ScriptBuf::builder()
             .push_int(i64::from(header_var.height + 1))
             .push_int(0xFFFF_FFFF)
@@ -1991,7 +2047,9 @@ impl Compiler {
             version: block.header.version.to_consensus(),
         });
 
-        // Record the block variable index and transaction variable indices in metadata
+        // Record the block variable index, block_transactions variable index, and
+        // transaction variable indices in metadata so generators can look them up
+        // by block variable index later.
         let block_hash = block.header.block_hash();
         let block_var_index = self.variables.len();
         self.append_variable(block);
@@ -2002,6 +2060,7 @@ impl Compiler {
             .or_insert((
                 header_var_index,
                 block_var_index,
+                block_transactions_var_index,
                 block_transactions_var.var_indices.clone(),
             ));
 
