@@ -1,0 +1,4 @@
+name: minimal-witness
+commit: c0219f6beaa001e9bd58c0f0cbf0a1ee480151fd
+differential: 1
+description: https://github.com/libbitcoin/libbitcoin-system/issues/1526

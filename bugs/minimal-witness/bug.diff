@@ -1,0 +1,18 @@
+diff --git a/src/script/script.cpp b/src/script/script.cpp
+index 829e351..01421fe 100644
+--- a/src/script/script.cpp
++++ b/src/script/script.cpp
+@@ -255,12 +255,7 @@ bool CScript::IsWitnessProgram(int& version, std::vector<unsigned char>& program
+     if ((*this)[0] != OP_0 && ((*this)[0] < OP_1 || (*this)[0] > OP_16)) {
+         return false;
+     }
+-    if ((size_t)((*this)[1] + 2) == this->size()) {
+-        version = DecodeOP_N((opcodetype)(*this)[0]);
+-        program = std::vector<unsigned char>(this->begin() + 2, this->end());
+-        return true;
+-    }
+-    return false;
++    return true;
+ }
+ 
+ bool CScript::IsPushOnly(const_iterator pc) const

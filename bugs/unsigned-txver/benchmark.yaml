@@ -1,0 +1,4 @@
+name: unsigned-txver
+commit: c0219f6beaa001e9bd58c0f0cbf0a1ee480151fd
+differential: 1
+description: https://delvingbitcoin.org/t/disclosure-btcd-consensus-bugs-due-to-usage-of-signed-transaction-version/455
