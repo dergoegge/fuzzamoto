@@ -94,6 +94,23 @@ impl TargetNode for BitcoinCoreTarget {
         })
     }
 
+    fn import_mempool(&self, bytes: &[u8]) -> Result<(), String> {
+        let mempool_path = self.node.workdir().join("mempool.dat");
+        std::fs::write(&mempool_path, bytes)
+            .map_err(|e| format!("Failed to write mempool.dat: {e}"))?;
+        self.node
+            .client
+            .call::<serde_json::Value>(
+                "importmempool",
+                &[mempool_path
+                    .to_str()
+                    .ok_or("mempool.dat path is not valid UTF-8")?
+                    .into()],
+            )
+            .map(|_| ())
+            .map_err(|e| format!("Failed to import mempool: {e:?}"))
+    }
+
     fn set_mocktime(&mut self, time: u64) -> Result<(), String> {
         let client = &self.node.client;
 
