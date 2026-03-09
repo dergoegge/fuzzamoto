@@ -82,6 +82,7 @@ COPY ./fuzzamoto-cli/src/ src/
 WORKDIR /fuzzamoto/fuzzamoto-ir
 COPY ./fuzzamoto-ir/Cargo.toml .
 COPY ./fuzzamoto-ir/src/ src/
+COPY ./fuzzamoto-ir/benches/ benches/
 
 WORKDIR /fuzzamoto/fuzzamoto-libafl
 COPY ./fuzzamoto-libafl/Cargo.toml .

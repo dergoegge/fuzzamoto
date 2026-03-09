@@ -1,5 +1,5 @@
 use super::{Mutator, MutatorError, MutatorResult};
-use crate::{PerTestcaseMetadata, Program, ProgramBuilder};
+use crate::{PerTestcaseMetadata, Program, VariableLookup};
 
 use rand::{RngCore, seq::IteratorRandom};
 
@@ -16,7 +16,7 @@ impl<R: RngCore> Mutator<R> for InputMutator {
         rng: &mut R,
         _meta: Option<&PerTestcaseMetadata>,
     ) -> MutatorResult {
-        let Some(candidate_instruction) = program
+        let Some((instr_idx, _)) = program
             .instructions
             .iter()
             .enumerate()
@@ -25,34 +25,26 @@ impl<R: RngCore> Mutator<R> for InputMutator {
         else {
             return Err(MutatorError::NoMutationsAvailable);
         };
-        let candidate_instruction = (candidate_instruction.0, candidate_instruction.1.clone());
 
-        let program_upto = Program::unchecked_new(
-            program.context.clone(),
-            program.instructions[..candidate_instruction.0].to_vec(),
-        );
+        let lookup = VariableLookup::from_instructions(&program.instructions[..instr_idx]);
 
-        let builder = ProgramBuilder::from_program(program_upto)
-            .expect("Program upto the chosen instruction should always be valid");
-
-        let candidate_input = candidate_instruction
-            .1
+        let (input_slot, &var_idx) = program.instructions[instr_idx]
             .inputs
             .iter()
             .enumerate()
             .choose(rng)
             .expect("Candidates have at least one input");
 
-        let current_variable = builder
-            .get_variable(*candidate_input.1)
-            .expect("Candiate variable has to exist");
+        let current_variable = lookup
+            .get_variable(var_idx)
+            .expect("Candidate variable has to exist");
 
-        if let Some(new_var) = builder.get_random_variable(rng, &current_variable.var) {
+        if let Some(new_var) = lookup.get_random_variable(rng, &current_variable.var) {
             if new_var.index == current_variable.index {
                 return Err(MutatorError::NoMutationsAvailable);
             }
 
-            program.instructions[candidate_instruction.0].inputs[candidate_input.0] = new_var.index;
+            program.instructions[instr_idx].inputs[input_slot] = new_var.index;
         }
 
         Ok(())
