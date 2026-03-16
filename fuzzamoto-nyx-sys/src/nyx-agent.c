@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <dlfcn.h>
 #include <execinfo.h>
 #include <inttypes.h>
